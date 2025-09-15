@@ -1,0 +1,161 @@
+/*
+Copyright 2018 The Kubernetes Authors.
+Copyright 2018-2025 The Volcano Authors.
+
+Modifications made by Volcano authors:
+- Enhanced gang scheduling validation with task-level validity checks
+- Improved preemption logic to respect gang scheduling constraints
+- Added support for job starving detection and enhanced pipeline state management
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package capacitycard
+
+import (
+	`fmt`
+	`math`
+	`strings`
+
+	`github.com/gogf/gf/v2/util/gconv`
+	corev1 `k8s.io/api/core/v1`
+	`volcano.sh/volcano/pkg/scheduler/api`
+	`volcano.sh/volcano/pkg/scheduler/framework`
+)
+
+type CardInfo struct {
+	Name   string // card name
+	Memory int64  // card memory in bytes
+}
+
+func (p *Plugin) calculateTotalResourceFromSession(ssn *framework.Session) *api.Resource {
+	var (
+		nodes = make([]*corev1.Node, 0)
+	)
+	for _, apiNode := range ssn.Nodes {
+		nodes = append(nodes, apiNode.Node)
+	}
+	return NewTotalResourceSupportingCard(p.calculateTotalResourceFromNodes(nodes))
+}
+
+func (p *Plugin) calculateTotalResourceFromNodes(nodes []*corev1.Node) corev1.ResourceList {
+	var (
+		totalResource = make(corev1.ResourceList)
+	)
+	for _, node := range nodes {
+		addResourceList(
+			totalResource,
+			p.calculateTotalResourceFromNode(node),
+		)
+	}
+	return totalResource
+}
+
+func (p *Plugin) calculateTotalResourceFromNode(node *corev1.Node) corev1.ResourceList {
+	var (
+		totalResource = node.Status.Capacity.DeepCopy()
+		cardInfo      = p.getCardInfoFromNode(node)
+	)
+	for resName, cardCapacity := range node.Status.Capacity {
+		// MPS resource.
+		if isMpsResourceName(resName) {
+			if cardCapacity.Value() <= 0 {
+				continue
+			}
+			mpsReplicas := gconv.Int(node.Labels[MpsReplicaLabel])
+			if mpsReplicas > 0 {
+				cardName := fmt.Sprintf(
+					MpsSharedCardNamePattern,
+					cardInfo.Name,
+					int(math.Round(float64(cardInfo.Memory)/1024)), gconv.Int(mpsReplicas),
+				)
+				totalResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+			}
+			continue
+		}
+
+		// MIG resource.
+		if isMigResourceName(resName) {
+			if cardCapacity.Value() <= 0 {
+				continue
+			}
+			var (
+				migSpec  = strings.TrimPrefix(string(resName), MigResourceNamePrefix)
+				cardName = fmt.Sprintf(MigSharedCardNamePattern, cardInfo.Name, migSpec)
+			)
+			totalResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+			continue
+		}
+
+		// 1. whole card resource
+		// 2. parts are shared card resource, parts are whole card resource
+		for _, resourcePrefix := range p.resourcePrefixes {
+			if strings.HasPrefix(string(resName), resourcePrefix) && cardCapacity.Value() > 0 {
+				totalResource[corev1.ResourceName(cardInfo.Name)] = cardCapacity.DeepCopy()
+				break
+			}
+		}
+	}
+	return totalResource
+}
+
+func (p *Plugin) getCardInfoFromNode(node *corev1.Node) *CardInfo {
+	cardInfo := &CardInfo{
+		Name:   p.getCardNameFromNode(node),
+		Memory: p.getCardMemoryFromNode(node),
+	}
+	return cardInfo
+}
+
+func (p *Plugin) getCardNameFromNode(node *corev1.Node) string {
+	for k, v := range node.Labels {
+		for _, resourcePrefix := range p.resourcePrefixes {
+			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".product") {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func (p *Plugin) getCardMemoryFromNode(node *corev1.Node) int64 {
+	for k, v := range node.Labels {
+		for _, resourcePrefix := range p.resourcePrefixes {
+			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".memory") {
+				return gconv.Int64(v) * 1024 * 1024
+			}
+		}
+	}
+	return 0
+}
+
+// isMpsResourceName checks if the resource name is MPS resource name.
+func isMpsResourceName(resourceName corev1.ResourceName) bool {
+	return resourceName == MPSResourceName
+}
+
+// isMigResourceName checks if the resource name is MIG resource name.
+func isMigResourceName(resourceName corev1.ResourceName) bool {
+	return strings.HasPrefix(string(resourceName), MigResourceNamePrefix)
+}
+
+func addResourceList(total corev1.ResourceList, add corev1.ResourceList) {
+	for resourceName, quantity := range add {
+		if val, ok := total[resourceName]; ok {
+			val.Add(quantity)
+			total[resourceName] = val
+		} else {
+			total[resourceName] = quantity.DeepCopy()
+		}
+	}
+}
