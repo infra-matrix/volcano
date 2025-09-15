@@ -23,48 +23,106 @@ limitations under the License.
 package capacitycard
 
 import (
+	`fmt`
+
+	v1 `k8s.io/api/core/v1`
+	resourcehelper "k8s.io/kubectl/pkg/util/resource"
 	`volcano.sh/volcano/pkg/scheduler/api`
 )
 
 type JobInfo struct {
 	*api.JobInfo
-	cardResource *api.Resource
+	jobCardResource *api.Resource
 }
 
 // NewJobInfo creates a JobInfo instance.
-func NewJobInfo(job *api.JobInfo) *JobInfo {
-	// 将智算卡请求量从PodGroup的Annotations中分离出来，放到资源的ScalarResources中
-	cardResource := GetCardResourceFromAnnotations(
+func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
+	// read card request from Job(PodGroup).
+	jobCardResource := GetCardResourceFromAnnotations(
 		job.PodGroup.Annotations,
-		JobAnnotationKeyCardQuota,
+		JobAnnotationKeyCardRequest,
 	)
-	if cardResource.IsEmpty() {
-		cardResource = nil
+	if jobCardResource.IsEmpty() {
+		jobCardResource = nil
 	}
-	// add card request to job total request
-	job.TotalRequest.Add(cardResource)
+	// reset job allocated resource, will recalculate it below
+	job.Allocated = api.EmptyResource()
 	// read task card request from task annotations.
+	realCardRequest := api.EmptyResource()
 	for taskId, ti := range job.Tasks {
 		if ti.Pod != nil {
-			taskCardResource := GetCardResourceFromAnnotations(
-				ti.Pod.Annotations,
-				TaskAnnotationKeyCardQuota,
-			)
+			taskCardResource, err := p.getCardResourceFromTask(ti)
+			if err != nil {
+				return nil, err
+			}
+			realCardRequest.Add(taskCardResource)
 			ti.Resreq.Add(taskCardResource)
 			job.Tasks[taskId] = ti
 		}
+		if api.AllocatedStatus(ti.Status) {
+			job.Allocated.Add(ti.Resreq)
+		}
+	}
+	if realCardRequest.IsEmpty() {
+		job.TotalRequest.Add(jobCardResource)
+	} else {
+		jobCardResource = realCardRequest
+		job.TotalRequest.Add(realCardRequest)
 	}
 	return &JobInfo{
-		JobInfo:      job,
-		cardResource: cardResource,
+		JobInfo:         job,
+		jobCardResource: jobCardResource,
+	}, nil
+}
+
+func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error) {
+	if ti.Pod == nil {
+		return api.EmptyResource(), nil
 	}
+	cardName := ti.Pod.Annotations[TaskAnnotationKeyCardName]
+	if cardName == "" {
+		return api.EmptyResource(), nil
+	}
+	cardResourceName, ok := p.cardNameToResourceName[v1.ResourceName(cardName)]
+	if !ok {
+		return api.EmptyResource(), fmt.Errorf("no resource name found for card <%s>", cardName)
+	}
+	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(ti.Pod)
+	if quantity, found := podLimits[cardResourceName]; found {
+		return &api.Resource{
+			ScalarResources: map[v1.ResourceName]float64{
+				v1.ResourceName(cardName): float64(quantity.Value()),
+			},
+		}, nil
+	}
+	if quantity, found := podRequests[cardResourceName]; found {
+		return &api.Resource{
+			ScalarResources: map[v1.ResourceName]float64{
+				v1.ResourceName(cardName): float64(quantity.Value()),
+			},
+		}, nil
+	}
+	return api.EmptyResource(), fmt.Errorf(
+		"no resource <%s> defined in reqests/limits for card <%s>",
+		cardResourceName, cardName,
+	)
 }
 
 // GetMinResources return the min resources of PodGroup.
 func (ji *JobInfo) GetMinResources() *api.Resource {
 	jobResource := ji.JobInfo.GetMinResources()
-	if ji.cardResource != nil {
-		jobResource.Add(ji.cardResource)
-	}
+	jobResource.Add(ji.jobCardResource)
 	return jobResource
+}
+
+// GetElasticResources returns those partly resources in allocated which are more than its minResource
+func (ji *JobInfo) GetElasticResources() *api.Resource {
+	if ji.Allocated == nil {
+		return api.EmptyResource()
+	}
+	var (
+		minResource = ji.GetMinResources()
+		elastic     = api.ExceededPart(ji.Allocated, minResource)
+	)
+	return elastic
 }

@@ -24,6 +24,7 @@ package capacitycard
 
 import (
 	`github.com/gogf/gf/v2/util/gconv`
+	corev1 `k8s.io/api/core/v1`
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
 	"volcano.sh/volcano/pkg/scheduler/framework"
@@ -38,31 +39,33 @@ const (
 	// MpsReplicaLabel 节点上的MPS拆卡副本数量标签(一张卡拆成几分)
 	MpsReplicaLabel = "nvidia.com/gpu.replicas"
 
-	MpsSharedCardNamePattern       = "%s/mps-%dg*1/%d"
-	MigSharedCardNamePattern       = "%s/mig-%s-mixed"
-	MigResourceNamePrefix          = "nvidia.com/mig-"
-	QueueAnnotationKeyCardQuota    = "volcano.sh/card.quota"
-	JobAnnotationKeyCardQuota      = "volcano.sh/card.request"
-	PodGroupAnnotationKeyCardQuota = JobAnnotationKeyCardQuota
-	TaskAnnotationKeyCardQuota     = JobAnnotationKeyCardQuota
+	MpsSharedCardNamePattern    = "%s/mps-%dg*1/%d"
+	MigSharedCardNamePattern    = "%s/mig-%s-mixed"
+	MigResourceNamePrefix       = "nvidia.com/mig-"
+	QueueAnnotationKeyCardQuota = "volcano.sh/card.quota"
+	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
+	TaskAnnotationKeyCardName   = "volcano.sh/card.name"
+	MultiCardSeparator          = "|"
 )
 
 type Plugin struct {
-	queueOpts        map[api.QueueID]*queueAttr
-	totalResource    *api.Resource
-	totalGuarantee   *api.Resource
-	arguments        framework.Arguments
-	resourcePrefixes []string
+	queueOpts              map[api.QueueID]*queueAttr
+	totalResource          *api.Resource
+	totalGuarantee         *api.Resource
+	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
+	arguments              framework.Arguments
+	resourcePrefixes       []string
 }
 
 // New return capacity plugin.
 func New(arguments framework.Arguments) framework.Plugin {
 	return &Plugin{
-		queueOpts:        map[api.QueueID]*queueAttr{},
-		totalResource:    api.EmptyResource(),
-		totalGuarantee:   api.EmptyResource(),
-		arguments:        arguments,
-		resourcePrefixes: gconv.Strings(arguments["resourcePrefixes"]),
+		queueOpts:              map[api.QueueID]*queueAttr{},
+		totalResource:          api.EmptyResource(),
+		totalGuarantee:         api.EmptyResource(),
+		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
+		arguments:              arguments,
+		resourcePrefixes:       gconv.Strings(arguments["resourcePrefixes"]),
 	}
 }
 
@@ -73,16 +76,19 @@ func (p *Plugin) Name() string {
 
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
-	p.totalResource = p.calculateTotalResourceFromSession(ssn)
+	// TODO: node list might not be ready.
+	p.buildTotalResource(ssn)
 	p.buildQueueAttrs(ssn)
 
-	klog.V(4).Infof("The total cluster resource is: %v", p.totalResource)
-	klog.V(4).Infof("The total guarantee resource is: %v", p.totalGuarantee)
+	klog.V(4).Infof("Total resource is: %v", p.totalResource)
+	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
-	// PogGroup status from Pending to InQueue.
-	// ssn.AddJobEnqueueableFn(p.Name(), func(obj interface{}) int {
-	// 	return util.Permit
-	// })
+	ssn.AddJobEnqueueableFn(p.Name(), p.JobEnqueueableFn(ssn))
+
+	// Pod phase from Pending to Running.
+	ssn.AddAllocatableFn(p.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
+		return true
+	})
 
 	// ssn.AddAllocatableFn(cp.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
 	// 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
@@ -103,8 +109,8 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 }
 
 // OnSessionClose cleans up the plugin state.
-func (p *Plugin) OnSessionClose(ssn *framework.Session) {
+func (p *Plugin) OnSessionClose(_ *framework.Session) {
+	p.queueOpts = nil
 	p.totalResource = nil
 	p.totalGuarantee = nil
-	p.queueOpts = nil
 }

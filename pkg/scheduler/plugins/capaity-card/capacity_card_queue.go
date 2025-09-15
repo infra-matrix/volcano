@@ -36,17 +36,17 @@ import (
 )
 
 type queueAttr struct {
-	queueID        api.QueueID
-	name           string
-	share          float64
-	deserved       *api.Resource
-	allocated      *api.Resource
-	request        *api.Resource
+	queueID        api.QueueID   // queue UID
+	name           string        // queue name
+	share          float64       // share = max(allocated/deserved) of all resources
+	deserved       *api.Resource // deserved = min(realCapability, max(guarantee, queue.deserved))
+	allocated      *api.Resource // allocated = sum(job.allocated) of all active jobs
+	request        *api.Resource // request = sum(job.request) of all active jobs
 	elastic        *api.Resource // elastic = job.allocated - job.minAvailable
-	inqueue        *api.Resource
-	capability     *api.Resource
-	realCapability *api.Resource
-	guarantee      *api.Resource
+	inqueue        *api.Resource // inqueue = sum(job.minAvailable) of all inqueue jobs
+	capability     *api.Resource // the capability of a queue
+	realCapability *api.Resource // the real capability of a queue = min(capability, guarantee + exceeded part of cluster)
+	guarantee      *api.Resource // the guaranteed resource of a queue
 }
 
 func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
@@ -57,11 +57,15 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 
 	// Build attributes for Queues.
 	for _, apiJob := range ssn.Jobs {
-		job := NewJobInfo(apiJob)
+		job, err := p.NewJobInfo(apiJob)
+		if err != nil {
+			klog.Errorf("Failed to create jobInfo for job <%s/%s>: %+v", apiJob.Namespace, apiJob.Name, err)
+			continue
+		}
 		klog.V(4).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
 		if _, found := p.queueOpts[job.Queue]; !found {
 			queue := ssn.Queues[job.Queue]
-			attr := &queueAttr{
+			qAttr := &queueAttr{
 				queueID:   queue.UID,
 				name:      queue.Name,
 				deserved:  NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved),
@@ -72,26 +76,26 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 				guarantee: api.EmptyResource(),
 			}
 			if len(queue.Queue.Spec.Capability) != 0 {
-				attr.capability = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
-				if attr.capability.MilliCPU <= 0 {
-					attr.capability.MilliCPU = math.MaxFloat64
+				qAttr.capability = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
+				if qAttr.capability.MilliCPU <= 0 {
+					qAttr.capability.MilliCPU = math.MaxFloat64
 				}
-				if attr.capability.Memory <= 0 {
-					attr.capability.Memory = math.MaxFloat64
+				if qAttr.capability.Memory <= 0 {
+					qAttr.capability.Memory = math.MaxFloat64
 				}
 			}
 			if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
-				attr.guarantee = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
+				qAttr.guarantee = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
 			}
-			realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(attr.guarantee)
-			if attr.capability == nil {
-				attr.capability = api.EmptyResource()
-				attr.realCapability = realCapability
+			realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(qAttr.guarantee)
+			if qAttr.capability == nil {
+				qAttr.capability = api.EmptyResource()
+				qAttr.realCapability = realCapability
 			} else {
-				realCapability.MinDimensionResource(attr.capability, api.Infinity)
-				attr.realCapability = realCapability
+				realCapability.MinDimensionResource(qAttr.capability, api.Infinity)
+				qAttr.realCapability = realCapability
 			}
-			p.queueOpts[job.Queue] = attr
+			p.queueOpts[job.Queue] = qAttr
 			klog.V(4).Infof("Added Queue <%s> attributes.", job.Queue)
 		}
 

@@ -33,39 +33,44 @@ import (
 	`volcano.sh/volcano/pkg/scheduler/framework`
 )
 
+// CardInfo defines the basic information of a card.
+// One node only has one type of card.
 type CardInfo struct {
 	Name   string // card name
 	Memory int64  // card memory in bytes
 }
 
-func (p *Plugin) calculateTotalResourceFromSession(ssn *framework.Session) *api.Resource {
-	var (
-		nodes = make([]*corev1.Node, 0)
-	)
+func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
+	nodes := make([]*corev1.Node, 0)
 	for _, apiNode := range ssn.Nodes {
 		nodes = append(nodes, apiNode.Node)
 	}
-	return NewTotalResourceSupportingCard(p.calculateTotalResourceFromNodes(nodes))
+	if len(nodes) == 0 {
+		return false
+	}
+	p.buildTotalResourceFromNodes(nodes)
+	return true
 }
 
-func (p *Plugin) calculateTotalResourceFromNodes(nodes []*corev1.Node) corev1.ResourceList {
+func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
 	var (
-		totalResource = make(corev1.ResourceList)
+		totalNormalResource = make(corev1.ResourceList) // CPU, Memory, EphemeralStorage, etc.
+		totalCardResource   = make(corev1.ResourceList) // GPU/NPU/PPU cards, etc.
 	)
 	for _, node := range nodes {
 		addResourceList(
-			totalResource,
-			p.calculateTotalResourceFromNode(node),
+			totalNormalResource, node.Status.Capacity.DeepCopy(),
 		)
+		p.buildCardResourceFromNode(totalCardResource, node)
 	}
-	return totalResource
+	p.totalResource = api.NewResource(totalNormalResource)
+	for resName, quantity := range totalCardResource {
+		p.totalResource.AddScalar(resName, float64(quantity.Value()))
+	}
 }
 
-func (p *Plugin) calculateTotalResourceFromNode(node *corev1.Node) corev1.ResourceList {
-	var (
-		totalResource = node.Status.Capacity.DeepCopy()
-		cardInfo      = p.getCardInfoFromNode(node)
-	)
+func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList, node *corev1.Node) {
+	cardInfo := p.getCardInfoFromNode(node)
 	for resName, cardCapacity := range node.Status.Capacity {
 		// MPS resource.
 		if isMpsResourceName(resName) {
@@ -79,7 +84,8 @@ func (p *Plugin) calculateTotalResourceFromNode(node *corev1.Node) corev1.Resour
 					cardInfo.Name,
 					int(math.Round(float64(cardInfo.Memory)/1024)), gconv.Int(mpsReplicas),
 				)
-				totalResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+				totalCardResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+				p.cardNameToResourceName[corev1.ResourceName(cardName)] = resName
 			}
 			continue
 		}
@@ -93,7 +99,8 @@ func (p *Plugin) calculateTotalResourceFromNode(node *corev1.Node) corev1.Resour
 				migSpec  = strings.TrimPrefix(string(resName), MigResourceNamePrefix)
 				cardName = fmt.Sprintf(MigSharedCardNamePattern, cardInfo.Name, migSpec)
 			)
-			totalResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+			totalCardResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
+			p.cardNameToResourceName[corev1.ResourceName(cardName)] = resName
 			continue
 		}
 
@@ -101,12 +108,12 @@ func (p *Plugin) calculateTotalResourceFromNode(node *corev1.Node) corev1.Resour
 		// 2. parts are shared card resource, parts are whole card resource
 		for _, resourcePrefix := range p.resourcePrefixes {
 			if strings.HasPrefix(string(resName), resourcePrefix) && cardCapacity.Value() > 0 {
-				totalResource[corev1.ResourceName(cardInfo.Name)] = cardCapacity.DeepCopy()
+				totalCardResource[corev1.ResourceName(cardInfo.Name)] = cardCapacity.DeepCopy()
+				p.cardNameToResourceName[corev1.ResourceName(cardInfo.Name)] = resName
 				break
 			}
 		}
 	}
-	return totalResource
 }
 
 func (p *Plugin) getCardInfoFromNode(node *corev1.Node) *CardInfo {

@@ -31,30 +31,6 @@ import (
 	`volcano.sh/volcano/pkg/scheduler/api`
 )
 
-// NewTotalResourceSupportingCard creates a new resource object from resource list
-func NewTotalResourceSupportingCard(rl v1.ResourceList) *api.Resource {
-	r := api.EmptyResource()
-	for rName, rQuant := range rl {
-		switch rName {
-		case v1.ResourceCPU:
-			r.MilliCPU += float64(rQuant.MilliValue())
-		case v1.ResourceMemory:
-			r.Memory += float64(rQuant.Value())
-		case v1.ResourcePods:
-			r.MaxTaskNum += int(rQuant.Value())
-			r.AddScalar(rName, float64(rQuant.Value()))
-		case v1.ResourceEphemeralStorage:
-			r.AddScalar(rName, float64(rQuant.MilliValue()))
-		default:
-			if api.IsCountQuota(rName) {
-				continue
-			}
-			r.AddScalar(rName, float64(rQuant.Value()))
-		}
-	}
-	return r
-}
-
 // NewQueueResourceSupportingCard creates a new resource object from resource list
 func NewQueueResourceSupportingCard(q *scheduling.Queue, rl v1.ResourceList) *api.Resource {
 	var (
