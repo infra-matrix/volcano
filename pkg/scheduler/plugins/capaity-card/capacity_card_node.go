@@ -29,6 +29,8 @@ import (
 
 	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
+	`k8s.io/apimachinery/pkg/labels`
+	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
 	`volcano.sh/volcano/pkg/scheduler/framework`
 )
@@ -41,11 +43,10 @@ type CardInfo struct {
 }
 
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
-	nodes := make([]*corev1.Node, 0)
-	for _, apiNode := range ssn.Nodes {
-		nodes = append(nodes, apiNode.Node)
-	}
-	if len(nodes) == 0 {
+	nodeLister := ssn.InformerFactory().Core().V1().Nodes().Lister()
+	nodes, err := nodeLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("Failed to list nodes: %+v", err)
 		return false
 	}
 	p.buildTotalResourceFromNodes(nodes)

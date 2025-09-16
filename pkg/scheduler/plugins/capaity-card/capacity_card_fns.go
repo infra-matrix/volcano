@@ -30,62 +30,62 @@ import (
 	`volcano.sh/volcano/pkg/scheduler/plugins/util`
 )
 
-// JobEnqueueableFn returns a function to check whether the job can be enqueued.
-// It handles pending PodGroups, and checks whether the queue has enough.
-// It does the following aspects:
-// 1. PogGroup phase from Pending to InQueue.
+// JobEnqueueableFn checks whether the job can be enqueued, which does the queue-level capacity pre-check.
+// It handles pending PodGroups, and checks whether the queue has enough resource to proceed.
+// If it returns util.Permit, which will do the following aspects to resources:
+// 1. PogGroup phase will be changed from Pending to InQueue.
 // 2. Pod will be created and in phase of Pending.
-// 3. Queue resource pre-check.
-func (p *Plugin) JobEnqueueableFn(ssn *framework.Session) api.VoteFn {
-	return func(obj interface{}) int {
-		job, err := p.NewJobInfo(obj.(*api.JobInfo))
-		if err != nil {
-			klog.Errorf("Failed to create jobInfo for job <%s/%s>: %+v", job.Namespace, job.Name, err)
-			return util.Reject
-		}
-		var (
-			queueID = job.Queue
-			queue   = ssn.Queues[queueID]
-			qAttr   = p.queueOpts[queueID]
+func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) int {
+	job, err := p.NewJobInfo(jobInfo)
+	if err != nil {
+		klog.Errorf(
+			"Failed to create jobInfo for job <%s/%s>: %+v",
+			jobInfo.Namespace, jobInfo.Name, err,
 		)
+		return util.Reject
+	}
+	var (
+		queueID = job.Queue
+		queue   = ssn.Queues[queueID]
+		qAttr   = p.queueOpts[queueID]
+	)
 
-		// If the queue is not open, do not enqueue
-		if queue.Queue.Status.State != scheduling.QueueStateOpen {
-			klog.V(3).Infof(
-				"Queue <%s> current state: %s, is not open state, reject job <%s/%s>.",
-				queue.Name, queue.Queue.Status.State, job.Namespace, job.Name,
-			)
-			return util.Reject
-		}
-		// If no capability is set, always enqueue the job.
-		if qAttr.realCapability == nil {
-			klog.V(4).Infof(
-				"Capability of queue <%s> was not set, allow job <%s/%s> to Inqueue.",
-				queue.Name, job.Namespace, job.Name,
-			)
-			return util.Permit
-		}
-
-		if job.PodGroup.Spec.MinResources == nil {
-			klog.V(4).Infof("Job %s MinResources is null.", job.Name)
-			return util.Permit
-		}
-
-		// it checks whether the queue has enough resource to run the job.
-		if !p.isJobEnqueueable(qAttr, job) {
-			klog.V(2).Infof(
-				"Queue %s has no enough resource for job <%s/%s>",
-				queue.Name, job.Namespace, job.Name,
-			)
-			return util.Reject
-		}
-
-		// job enqueued
-		deductedResources := job.DeductSchGatedResources(job.GetMinResources())
-		qAttr.inqueue.Add(deductedResources)
-		klog.V(5).Infof("Job <%s/%s> enqueued", job.Namespace, job.Name)
+	// If the queue is not open, do not enqueue
+	if queue.Queue.Status.State != scheduling.QueueStateOpen {
+		klog.V(3).Infof(
+			"Queue <%s> current state: %s, is not open state, reject job <%s/%s>.",
+			queue.Name, queue.Queue.Status.State, job.Namespace, job.Name,
+		)
+		return util.Reject
+	}
+	// If no capability is set, always enqueue the job.
+	if qAttr.realCapability == nil {
+		klog.V(4).Infof(
+			"Capability of queue <%s> was not set, allow job <%s/%s> to Inqueue.",
+			queue.Name, job.Namespace, job.Name,
+		)
 		return util.Permit
 	}
+
+	if job.PodGroup.Spec.MinResources == nil {
+		klog.V(4).Infof("Job %s MinResources is null.", job.Name)
+		return util.Permit
+	}
+
+	// it checks whether the queue has enough resource to run the job.
+	if !p.isJobEnqueueable(qAttr, job) {
+		klog.V(2).Infof(
+			"Queue %s has no enough resource for job <%s/%s>",
+			queue.Name, job.Namespace, job.Name,
+		)
+		return util.Reject
+	}
+
+	// job enqueued
+	deductedResources := job.DeductSchGatedResources(job.GetMinResources())
+	qAttr.inqueue.Add(deductedResources)
+	klog.V(5).Infof("Job <%s/%s> enqueued", job.Namespace, job.Name)
+	return util.Permit
 }
 
 func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
@@ -159,7 +159,7 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 			realCapabilityQuant = qAttr.realCapability.ScalarResources[scalarName]
 		)
 		if scalarQuant > 0 && inuseQuant > realCapabilityQuant {
-			klog.V(5).Infof(
+			klog.V(2).Infof(
 				"Job <%s/%s>, Queue <%s> has no enough %s, jobMinResourceReq <%v>, inuseResource <%v>, realCapability <%v>",
 				qAttr.name, job.Namespace, job.Name, scalarName,
 				scalarQuant, inuseQuant, realCapabilityQuant,

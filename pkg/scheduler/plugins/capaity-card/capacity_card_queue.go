@@ -49,7 +49,7 @@ type queueAttr struct {
 	guarantee      *api.Resource // the guaranteed resource of a queue
 }
 
-func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
+func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 	for _, queue := range ssn.Queues {
 		guarantee := NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
 		p.totalGuarantee.Add(guarantee)
@@ -96,7 +96,7 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 				qAttr.realCapability = realCapability
 			}
 			p.queueOpts[job.Queue] = qAttr
-			klog.V(4).Infof("Added Queue <%s> attributes.", job.Queue)
+			klog.V(5).Infof("Added Queue <%s> attributes.", job.Queue)
 		}
 
 		attr := p.queueOpts[job.Queue]
@@ -156,11 +156,9 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 			// return negative means high priority
 			return int(rv.Queue.Spec.Priority) - int(lv.Queue.Spec.Priority)
 		}
-
 		if p.queueOpts[lv.UID].share == p.queueOpts[rv.UID].share {
 			return 0
 		}
-
 		if p.queueOpts[lv.UID].share < p.queueOpts[rv.UID].share {
 			return -1
 		}
@@ -218,6 +216,7 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 			queueInfo.Name, realCapacity.MilliCPU, realCapacity.Memory, realCapacity.ScalarResources,
 		)
 	}
+	return true
 }
 
 func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
@@ -249,10 +248,8 @@ func (p *Plugin) updateShare(attr *queueAttr) {
 
 func updateQueueAttrShare(attr *queueAttr) {
 	res := float64(0)
-
 	for _, rn := range attr.deserved.ResourceNames() {
 		res = max(res, helpers.Share(attr.allocated.Get(rn), attr.deserved.Get(rn)))
 	}
-
 	attr.share = res
 }

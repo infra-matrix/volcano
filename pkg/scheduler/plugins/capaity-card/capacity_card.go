@@ -28,6 +28,7 @@ import (
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
 	"volcano.sh/volcano/pkg/scheduler/framework"
+	`volcano.sh/volcano/pkg/scheduler/plugins/util`
 )
 
 const (
@@ -39,15 +40,17 @@ const (
 	// MpsReplicaLabel 节点上的MPS拆卡副本数量标签(一张卡拆成几分)
 	MpsReplicaLabel = "nvidia.com/gpu.replicas"
 
-	MpsSharedCardNamePattern    = "%s/mps-%dg*1/%d"
-	MigSharedCardNamePattern    = "%s/mig-%s-mixed"
-	MigResourceNamePrefix       = "nvidia.com/mig-"
-	QueueAnnotationKeyCardQuota = "volcano.sh/card.quota"
-	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
-	TaskAnnotationKeyCardName   = "volcano.sh/card.name"
-	MultiCardSeparator          = "|"
+	MpsSharedCardNamePattern         = "%s/mps-%dg*1/%d"
+	MigSharedCardNamePattern         = "%s/mig-%s-mixed"
+	MigResourceNamePrefix            = "nvidia.com/mig-"
+	QueueAnnotationKeyCardQuota      = "volcano.sh/card.quota"
+	JobAnnotationKeyCardRequest      = "volcano.sh/card.request"
+	TaskAnnotationKeyCardName        = "volcano.sh/card.name"
+	MultiCardSeparator               = "|"
+	maxWaitSessionAttrsSyncedSeconds = 30
 )
 
+// Plugin implements the capacity plugin.
 type Plugin struct {
 	queueOpts              map[api.QueueID]*queueAttr
 	totalResource          *api.Resource
@@ -76,17 +79,31 @@ func (p *Plugin) Name() string {
 
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
-	// TODO: node list might not be ready.
-	p.buildTotalResource(ssn)
-	p.buildQueueAttrs(ssn)
+	readyToSchedule := p.buildTotalResource(ssn)
+	if readyToSchedule {
+		readyToSchedule = p.buildQueueAttrs(ssn)
+	}
 
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
-	ssn.AddJobEnqueueableFn(p.Name(), p.JobEnqueueableFn(ssn))
+	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
+		jobInfo := obj.(*api.JobInfo)
+		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject job <%s/%s>.",
+				p.Name(), jobInfo.Namespace, jobInfo.Name,
+			)
+			return util.Reject
+		}
+		return p.JobEnqueueableFn(ssn, jobInfo)
+	})
 
 	// Pod phase from Pending to Running.
 	ssn.AddAllocatableFn(p.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
+		if !readyToSchedule {
+			return false
+		}
 		return true
 	})
 
@@ -113,4 +130,5 @@ func (p *Plugin) OnSessionClose(_ *framework.Session) {
 	p.queueOpts = nil
 	p.totalResource = nil
 	p.totalGuarantee = nil
+	p.cardNameToResourceName = nil
 }
