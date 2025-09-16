@@ -25,6 +25,7 @@ package capacitycard
 import (
 	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
+	v1 `k8s.io/client-go/listers/core/v1`
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
 	"volcano.sh/volcano/pkg/scheduler/framework"
@@ -32,14 +33,9 @@ import (
 )
 
 const (
-	// PluginName indicates name of volcano scheduler plugin.
-	PluginName = "capacity-card"
-
-	// MPSResourceName 用于抽象MPS资源类型,MPS的资源是固定的，都是这个ResourceName
-	MPSResourceName = "nvidia.com/gpu.shared"
-	// MpsReplicaLabel 节点上的MPS拆卡副本数量标签(一张卡拆成几分)
-	MpsReplicaLabel = "nvidia.com/gpu.replicas"
-
+	PluginName                  = "capacity-card"
+	MPSResourceName             = "nvidia.com/gpu.shared"
+	MpsReplicaLabel             = "nvidia.com/gpu.replicas"
 	MpsSharedCardNamePattern    = "%s/mps-%dg*1/%d"
 	MigSharedCardNamePattern    = "%s/mig-%s-mixed"
 	MigResourceNamePrefix       = "nvidia.com/mig-"
@@ -47,6 +43,8 @@ const (
 	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
 	TaskAnnotationKeyCardName   = "volcano.sh/card.name"
 	MultiCardSeparator          = "|"
+	configResourcePrefixesName  = "resourcePrefixes"
+	cardCountQuantityMultiplier = 1000
 )
 
 // Plugin implements the capacity plugin.
@@ -55,6 +53,7 @@ type Plugin struct {
 	totalResource          *api.Resource
 	totalGuarantee         *api.Resource
 	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
+	nodeLister             v1.NodeLister
 	arguments              framework.Arguments
 	resourcePrefixes       []string
 }
@@ -67,7 +66,7 @@ func New(arguments framework.Arguments) framework.Plugin {
 		totalGuarantee:         api.EmptyResource(),
 		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
 		arguments:              arguments,
-		resourcePrefixes:       gconv.Strings(arguments["resourcePrefixes"]),
+		resourcePrefixes:       gconv.Strings(arguments[configResourcePrefixesName]),
 	}
 }
 
@@ -81,6 +80,9 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	readyToSchedule := p.buildTotalResource(ssn)
 	if readyToSchedule {
 		readyToSchedule = p.buildQueueAttrs(ssn)
+	}
+	if readyToSchedule {
+		p.buildQueueMetrics(ssn)
 	}
 
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)

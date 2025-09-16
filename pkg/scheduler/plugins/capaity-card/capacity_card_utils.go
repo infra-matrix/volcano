@@ -24,6 +24,7 @@ package capacitycard
 
 import (
 	`encoding/json`
+	`strings`
 
 	v1 `k8s.io/api/core/v1`
 	`k8s.io/klog/v2`
@@ -40,8 +41,8 @@ func NewQueueResourceSupportingCard(q *scheduling.Queue, rl v1.ResourceList) *ap
 	if queueResource.ScalarResources == nil {
 		queueResource.ScalarResources = make(map[v1.ResourceName]float64)
 	}
-	for cardName, cardCount := range queueCardResource.ScalarResources {
-		queueResource.ScalarResources[cardName] = cardCount
+	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
+		queueResource.ScalarResources[cardName] = cardCountMilli
 	}
 	return queueResource
 }
@@ -62,8 +63,60 @@ func GetCardResourceFromAnnotations(annotations map[string]string, key string) *
 			cardResource.ScalarResources = make(map[v1.ResourceName]float64)
 		}
 		for cardName, cardCount := range cardMap {
-			cardResource.ScalarResources[v1.ResourceName(cardName)] = float64(cardCount)
+			cardResource.ScalarResources[v1.ResourceName(cardName)] = float64(
+				cardCount * cardCountQuantityMultiplier,
+			)
 		}
 	}
 	return cardResource
+}
+
+// CheckSingleScalarResourceResult is the result of CheckSingleScalarResource.
+type CheckSingleScalarResourceResult struct {
+	Ok                  bool
+	NoEnoughScalarName  v1.ResourceName
+	NoEnoughScalarCount float64
+	ToBeUsedScalarQuant float64
+	RealCapabilityQuant float64
+}
+
+// CheckSingleScalarResource checks whether the scalar resource is enough.
+func CheckSingleScalarResource(
+	scalarName v1.ResourceName,
+	scalarQuant float64,
+	toBeUsedResource, realCapability *api.Resource,
+) CheckSingleScalarResourceResult {
+	result := CheckSingleScalarResourceResult{
+		Ok: true,
+	}
+	// The multi-cards name is given like: NVIDIA-GTX-GeForce-4090D|NVIDIA-H200 .
+	// The card name is confirmed after the task is assigned to certain node,
+	// in which the card name is extracted from node's label.
+	//
+	// In multi-cards name, any one of the card can satisfy the request is ok.
+	if strings.Contains(scalarName.String(), MultiCardSeparator) {
+		multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
+		for _, cardName := range multiCardNames {
+			if result = CheckSingleScalarResource(
+				v1.ResourceName(cardName), scalarQuant, toBeUsedResource, realCapability,
+			); result.Ok {
+				return result
+			}
+		}
+		result.Ok = false
+		result.NoEnoughScalarName = v1.ResourceName(multiCardNames[0])
+		result.NoEnoughScalarCount = scalarQuant
+		return result
+	}
+
+	result.ToBeUsedScalarQuant = toBeUsedResource.ScalarResources[scalarName]
+	result.RealCapabilityQuant = realCapability.ScalarResources[scalarName]
+	if scalarQuant > 0 && result.ToBeUsedScalarQuant > result.RealCapabilityQuant {
+		result.Ok = false
+		result.NoEnoughScalarName = scalarName
+		result.NoEnoughScalarCount = scalarQuant
+		return result
+	}
+	result.Ok = true
+	return result
 }

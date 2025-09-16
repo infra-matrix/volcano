@@ -42,15 +42,16 @@ func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bo
 	return p.isTaskAllocatable(p.queueOpts[queue.UID], candidate)
 }
 
+// isTaskAllocatable checks whether the task can be allocated in the queue according to the queue's real capability.
 func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 	var (
-		taskReqResource = ti.Resreq
-		realCapability  = qAttr.realCapability
-		futureUsed      = qAttr.allocated.Clone().Add(taskReqResource)
+		taskReqResource  = ti.Resreq
+		realCapability   = qAttr.realCapability
+		toBeUsedResource = qAttr.allocated.Clone().Add(taskReqResource)
 	)
-	if futureUsed == nil {
+	if toBeUsedResource == nil {
 		klog.V(5).Infof(
-			"Task <%s/%s>, Queue <%s> futureUsed is nil, allow it to allocate",
+			"Task <%s/%s>, Queue <%s> totalToBeUsed is nil, allow it to allocate",
 			ti.Namespace, ti.Name, qAttr.name,
 		)
 		return true
@@ -63,7 +64,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		return false
 	}
 	if taskReqResource == nil {
-		if ok := futureUsed.LessEqual(realCapability, api.Zero); !ok {
+		if ok := toBeUsedResource.LessEqual(realCapability, api.Zero); !ok {
 			klog.V(5).Infof(
 				"Task <%s/%s>, Queue <%s> realCapability <%s> is empty, deny it to enqueue",
 				ti.Namespace, ti.Name, qAttr.name, realCapability.String(),
@@ -71,31 +72,31 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			return false
 		}
 		klog.V(5).Infof(
-			"Task <%s/%s>, Queue <%s> taskReqResource is nil, allow it to enqueue",
+			"Task <%s/%s>, Queue <%s> request is nil, allow it to enqueue",
 			ti.Namespace, ti.Name, qAttr.name,
 		)
 		return true
 	}
 
-	if taskReqResource.MilliCPU > 0 && futureUsed.MilliCPU > realCapability.MilliCPU {
+	if taskReqResource.MilliCPU > 0 && toBeUsedResource.MilliCPU > realCapability.MilliCPU {
 		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough CPU, taskReqResource <%v>, futureUsed <%v>, realCapability <%v>",
+			"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, totalToBeUsed <%v>, realCapability <%v>",
 			ti.Namespace, ti.Name, qAttr.name,
-			taskReqResource.MilliCPU, futureUsed.MilliCPU, realCapability.MilliCPU,
+			taskReqResource.MilliCPU, toBeUsedResource.MilliCPU, realCapability.MilliCPU,
 		)
 		return false
 	}
-	if taskReqResource.Memory > 0 && futureUsed.Memory > realCapability.Memory {
+	if taskReqResource.Memory > 0 && toBeUsedResource.Memory > realCapability.Memory {
 		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough Memory, taskReqResource <%v Mi>, futureUsed <%v Mi>, realCapability <%v Mi>",
+			"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, totalToBeUsed <%v Mi>, realCapability <%v Mi>",
 			ti.Namespace, ti.Name, qAttr.name,
-			taskReqResource.Memory/1024/1024, futureUsed.Memory/1024/1024, realCapability.Memory/1024/1024,
+			taskReqResource.Memory/1024/1024, toBeUsedResource.Memory/1024/1024, realCapability.Memory/1024/1024,
 		)
 		return false
 	}
 
 	// if r.scalar is nil, whatever rr.scalar is, r is less or equal to rr
-	if futureUsed.ScalarResources == nil {
+	if toBeUsedResource.ScalarResources == nil {
 		return true
 	}
 
@@ -103,18 +104,21 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		if api.IsIgnoredScalarResource(scalarName) {
 			continue
 		}
-		var (
-			futureUsedQuant     = futureUsed.ScalarResources[scalarName]
-			realCapabilityQuant = realCapability.ScalarResources[scalarName]
+		checkResult := CheckSingleScalarResource(
+			scalarName, scalarQuant, toBeUsedResource, realCapability,
 		)
-		if scalarQuant > 0 && futureUsedQuant > realCapabilityQuant {
-			klog.V(2).Infof(
-				"Task <%s/%s>, Queue <%s> has no enough %s, scalarQuant <%v>, futureUsedQuant <%v>, realCapability <%v>",
-				ti.Namespace, ti.Name, qAttr.name, scalarName,
-				scalarQuant, futureUsedQuant, realCapabilityQuant,
-			)
-			return false
+		if checkResult.Ok {
+			continue
 		}
+		klog.V(2).Infof(
+			"Task <%s/%s>, Queue <%s> has no enough %s, request <%v>, totalToBeUsed <%v>, realCapability <%v>",
+			ti.Namespace, ti.Name, qAttr.name,
+			checkResult.NoEnoughScalarName,
+			checkResult.NoEnoughScalarCount,
+			checkResult.ToBeUsedScalarQuant,
+			checkResult.RealCapabilityQuant,
+		)
+		return false
 	}
 	return true
 }

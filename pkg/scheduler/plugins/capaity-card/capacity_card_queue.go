@@ -35,6 +35,7 @@ import (
 	`volcano.sh/volcano/pkg/scheduler/plugins/util`
 )
 
+// queueAttr is used to store the attributes of a queue.
 type queueAttr struct {
 	queueID        api.QueueID   // queue UID
 	name           string        // queue name
@@ -49,6 +50,7 @@ type queueAttr struct {
 	guarantee      *api.Resource // the guaranteed resource of a queue
 }
 
+// buildQueueAttrs builds the attributes for all queues in the session.
 func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 	for _, queue := range ssn.Queues {
 		guarantee := NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
@@ -59,7 +61,10 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 	for _, apiJob := range ssn.Jobs {
 		job, err := p.NewJobInfo(apiJob)
 		if err != nil {
-			klog.Errorf("Failed to create jobInfo for job <%s/%s>: %+v", apiJob.Namespace, apiJob.Name, err)
+			klog.Errorf(
+				"Failed to create jobInfo for job <%s/%s>: %+v",
+				apiJob.Namespace, apiJob.Name, err,
+			)
 			continue
 		}
 		klog.V(4).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
@@ -99,16 +104,16 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 			klog.V(5).Infof("Added Queue <%s> attributes.", job.Queue)
 		}
 
-		attr := p.queueOpts[job.Queue]
+		qAttr := p.queueOpts[job.Queue]
 		for status, tasks := range job.TaskStatusIndex {
 			if api.AllocatedStatus(status) {
 				for _, t := range tasks {
-					attr.allocated.Add(t.Resreq)
-					attr.request.Add(t.Resreq)
+					qAttr.allocated.Add(t.Resreq)
+					qAttr.request.Add(t.Resreq)
 				}
 			} else if status == api.Pending {
 				for _, t := range tasks {
-					attr.request.Add(t.Resreq)
+					qAttr.request.Add(t.Resreq)
 				}
 			}
 		}
@@ -116,7 +121,7 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 		if job.PodGroup.Status.Phase == scheduling.PodGroupInqueue {
 			// deduct the resources of scheduling gated tasks in a job when calculating inqueued resources
 			// so that it will not block other jobs from being inqueued.
-			attr.inqueue.Add(job.DeductSchGatedResources(job.GetMinResources()))
+			qAttr.inqueue.Add(job.DeductSchGatedResources(job.GetMinResources()))
 		}
 
 		// calculate inqueue resource for running jobs
@@ -128,12 +133,16 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 			job.PodGroup.Spec.MinResources != nil &&
 			int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
 			inqueued := util.GetInqueueResource(job.JobInfo, job.Allocated)
-			attr.inqueue.Add(job.DeductSchGatedResources(inqueued))
+			qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
 		}
-		attr.elastic.Add(job.GetElasticResources())
+		qAttr.elastic.Add(job.GetElasticResources())
 		klog.V(5).Infof(
 			"Queue %s allocated <%s> request <%s> inqueue <%s> elastic <%s>",
-			attr.name, attr.allocated.String(), attr.request.String(), attr.inqueue.String(), attr.elastic.String(),
+			qAttr.name,
+			qAttr.allocated.String(),
+			qAttr.request.String(),
+			qAttr.inqueue.String(),
+			qAttr.elastic.String(),
 		)
 	}
 
@@ -164,8 +173,33 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 		}
 		return 1
 	})
+	return true
+}
 
-	// Record metrics
+// newQueueAttr creates a new queueAttr for the given queue.
+func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
+	attr := &queueAttr{
+		queueID:    queue.UID,
+		name:       queue.Name,
+		deserved:   NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved),
+		allocated:  api.EmptyResource(),
+		request:    api.EmptyResource(),
+		elastic:    api.EmptyResource(),
+		inqueue:    api.EmptyResource(),
+		guarantee:  api.EmptyResource(),
+		capability: api.EmptyResource(),
+	}
+	if len(queue.Queue.Spec.Capability) != 0 {
+		attr.capability = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
+	}
+
+	if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
+		attr.guarantee = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
+	}
+	return attr
+}
+
+func (p *Plugin) buildQueueMetrics(ssn *framework.Session) {
 	for queueID, queueInfo := range ssn.Queues {
 		queue := ssn.Queues[queueID]
 		if attr, ok := p.queueOpts[queueID]; ok {
@@ -216,36 +250,15 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 			queueInfo.Name, realCapacity.MilliCPU, realCapacity.Memory, realCapacity.ScalarResources,
 		)
 	}
-	return true
 }
 
-func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
-	attr := &queueAttr{
-		queueID:    queue.UID,
-		name:       queue.Name,
-		deserved:   NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved),
-		allocated:  api.EmptyResource(),
-		request:    api.EmptyResource(),
-		elastic:    api.EmptyResource(),
-		inqueue:    api.EmptyResource(),
-		guarantee:  api.EmptyResource(),
-		capability: api.EmptyResource(),
-	}
-	if len(queue.Queue.Spec.Capability) != 0 {
-		attr.capability = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
-	}
-
-	if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
-		attr.guarantee = NewQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
-	}
-	return attr
-}
-
+// updateShare updates the share of the queueAttr and records the metric.
 func (p *Plugin) updateShare(attr *queueAttr) {
 	updateQueueAttrShare(attr)
 	metrics.UpdateQueueShare(attr.name, attr.share)
 }
 
+// updateQueueAttrShare updates the share of the queueAttr.
 func updateQueueAttrShare(attr *queueAttr) {
 	res := float64(0)
 	for _, rn := range attr.deserved.ResourceNames() {

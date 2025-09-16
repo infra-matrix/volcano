@@ -43,8 +43,8 @@ type CardInfo struct {
 }
 
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
-	nodeLister := ssn.InformerFactory().Core().V1().Nodes().Lister()
-	nodes, err := nodeLister.List(labels.Everything())
+	p.nodeLister = ssn.InformerFactory().Core().V1().Nodes().Lister()
+	nodes, err := p.nodeLister.List(labels.Everything())
 	if err != nil {
 		klog.Errorf("Failed to list nodes: %+v", err)
 		return false
@@ -66,14 +66,14 @@ func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
 	}
 	p.totalResource = api.NewResource(totalNormalResource)
 	for resName, quantity := range totalCardResource {
-		p.totalResource.AddScalar(resName, float64(quantity.Value()))
+		p.totalResource.AddScalar(resName, float64(quantity.Value()*cardCountQuantityMultiplier))
 	}
 }
 
 func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList, node *corev1.Node) {
 	cardInfo := p.getCardInfoFromNode(node)
 	for resName, cardCapacity := range node.Status.Capacity {
-		// MPS resource.
+		// special MPS resource.
 		if isMpsResourceName(resName) {
 			if cardCapacity.Value() <= 0 {
 				continue
@@ -91,7 +91,7 @@ func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList
 			continue
 		}
 
-		// MIG resource.
+		// special MIG resource.
 		if isMigResourceName(resName) {
 			if cardCapacity.Value() <= 0 {
 				continue
@@ -117,12 +117,11 @@ func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList
 	}
 }
 
-func (p *Plugin) getCardInfoFromNode(node *corev1.Node) *CardInfo {
-	cardInfo := &CardInfo{
+func (p *Plugin) getCardInfoFromNode(node *corev1.Node) CardInfo {
+	return CardInfo{
 		Name:   p.getCardNameFromNode(node),
 		Memory: p.getCardMemoryFromNode(node),
 	}
-	return cardInfo
 }
 
 func (p *Plugin) getCardNameFromNode(node *corev1.Node) string {

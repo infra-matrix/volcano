@@ -24,12 +24,14 @@ package capacitycard
 
 import (
 	`fmt`
+	`strings`
 
 	v1 `k8s.io/api/core/v1`
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
 	`volcano.sh/volcano/pkg/scheduler/api`
 )
 
+// JobInfo describes the job used in capacity plugin.
 type JobInfo struct {
 	*api.JobInfo
 	jobCardResource *api.Resource
@@ -42,9 +44,6 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		job.PodGroup.Annotations,
 		JobAnnotationKeyCardRequest,
 	)
-	if jobCardResource.IsEmpty() {
-		jobCardResource = nil
-	}
 	// reset job allocated resource, will recalculate it below
 	job.Allocated = api.EmptyResource()
 	// read task card request from task annotations.
@@ -56,7 +55,11 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 				return nil, err
 			}
 			realCardRequest.Add(taskCardResource)
-			ti.Resreq.Add(taskCardResource)
+			// re-calculate the card request for task.
+			// this task info resource assignment will update the queue.Status.Allocated after session close.
+			for scalarName, scalarCount := range taskCardResource.ScalarResources {
+				ti.Resreq.SetScalar(scalarName, scalarCount)
+			}
 			job.Tasks[taskId] = ti
 		}
 		if api.AllocatedStatus(ti.Status) {
@@ -69,43 +72,11 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		jobCardResource = realCardRequest
 		job.TotalRequest.Add(realCardRequest)
 	}
+
 	return &JobInfo{
 		JobInfo:         job,
 		jobCardResource: jobCardResource,
 	}, nil
-}
-
-func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error) {
-	if ti.Pod == nil {
-		return api.EmptyResource(), nil
-	}
-	cardName := ti.Pod.Annotations[TaskAnnotationKeyCardName]
-	if cardName == "" {
-		return api.EmptyResource(), nil
-	}
-	cardResourceName, ok := p.cardNameToResourceName[v1.ResourceName(cardName)]
-	if !ok {
-		return api.EmptyResource(), fmt.Errorf("no resource name found for card <%s>", cardName)
-	}
-	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(ti.Pod)
-	if quantity, found := podLimits[cardResourceName]; found {
-		return &api.Resource{
-			ScalarResources: map[v1.ResourceName]float64{
-				v1.ResourceName(cardName): float64(quantity.Value()),
-			},
-		}, nil
-	}
-	if quantity, found := podRequests[cardResourceName]; found {
-		return &api.Resource{
-			ScalarResources: map[v1.ResourceName]float64{
-				v1.ResourceName(cardName): float64(quantity.Value()),
-			},
-		}, nil
-	}
-	return api.EmptyResource(), fmt.Errorf(
-		"no resource <%s> defined in reqests/limits for card <%s>",
-		cardResourceName, cardName,
-	)
 }
 
 // GetMinResources return the min resources of PodGroup.
@@ -125,4 +96,64 @@ func (ji *JobInfo) GetElasticResources() *api.Resource {
 		elastic     = api.ExceededPart(ji.Allocated, minResource)
 	)
 	return elastic
+}
+
+// getCardResourceFromTask retrieves the card resource from task's pod annotations and requests/limits.
+func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error) {
+	if ti.Pod == nil {
+		return api.EmptyResource(), nil
+	}
+
+	cardName := ti.Pod.Annotations[TaskAnnotationKeyCardName]
+	if cardName == "" {
+		// no card requested, might be CPU type task.
+		return api.EmptyResource(), nil
+	}
+
+	// if multi-cards are requested, retrieve the confirmed card name from bound node.
+	if strings.Contains(cardName, MultiCardSeparator) {
+		if ti.Pod.Spec.NodeName == "" {
+			return api.EmptyResource(), nil
+		}
+		node, err := p.nodeLister.Get(ti.Pod.Spec.NodeName)
+		if err != nil {
+			return api.EmptyResource(), fmt.Errorf(
+				"failed to get node <%s> for task <%s/%s>: %+v",
+				ti.Pod.Spec.NodeName, ti.Namespace, ti.Name, err,
+			)
+		}
+		cardInfo := p.getCardInfoFromNode(node)
+		if cardInfo.Name == "" {
+			return api.EmptyResource(), fmt.Errorf(
+				"no card info found from node <%s> for task <%s/%s>",
+				node.Name, ti.Namespace, ti.Name,
+			)
+		}
+		cardName = cardInfo.Name
+	}
+
+	// retrieve resource quantity from requests/limits.
+	cardResourceName, ok := p.cardNameToResourceName[v1.ResourceName(cardName)]
+	if !ok {
+		return api.EmptyResource(), fmt.Errorf("no resource name found for card <%s>", cardName)
+	}
+	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(ti.Pod)
+	if quantity, found := podLimits[cardResourceName]; found {
+		return &api.Resource{
+			ScalarResources: map[v1.ResourceName]float64{
+				v1.ResourceName(cardName): float64(quantity.Value() * cardCountQuantityMultiplier),
+			},
+		}, nil
+	}
+	if quantity, found := podRequests[cardResourceName]; found {
+		return &api.Resource{
+			ScalarResources: map[v1.ResourceName]float64{
+				v1.ResourceName(cardName): float64(quantity.Value() * cardCountQuantityMultiplier),
+			},
+		}, nil
+	}
+	return api.EmptyResource(), fmt.Errorf(
+		"no resource <%s> defined in reqests/limits for card <%s>",
+		cardResourceName, cardName,
+	)
 }
