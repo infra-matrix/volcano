@@ -40,14 +40,13 @@ const (
 	// MpsReplicaLabel 节点上的MPS拆卡副本数量标签(一张卡拆成几分)
 	MpsReplicaLabel = "nvidia.com/gpu.replicas"
 
-	MpsSharedCardNamePattern         = "%s/mps-%dg*1/%d"
-	MigSharedCardNamePattern         = "%s/mig-%s-mixed"
-	MigResourceNamePrefix            = "nvidia.com/mig-"
-	QueueAnnotationKeyCardQuota      = "volcano.sh/card.quota"
-	JobAnnotationKeyCardRequest      = "volcano.sh/card.request"
-	TaskAnnotationKeyCardName        = "volcano.sh/card.name"
-	MultiCardSeparator               = "|"
-	maxWaitSessionAttrsSyncedSeconds = 30
+	MpsSharedCardNamePattern    = "%s/mps-%dg*1/%d"
+	MigSharedCardNamePattern    = "%s/mig-%s-mixed"
+	MigResourceNamePrefix       = "nvidia.com/mig-"
+	QueueAnnotationKeyCardQuota = "volcano.sh/card.quota"
+	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
+	TaskAnnotationKeyCardName   = "volcano.sh/card.name"
+	MultiCardSeparator          = "|"
 )
 
 // Plugin implements the capacity plugin.
@@ -87,6 +86,7 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
+	// Job enqueueable check.
 	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
 		jobInfo := obj.(*api.JobInfo)
 		if !readyToSchedule {
@@ -99,30 +99,17 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		return p.JobEnqueueableFn(ssn, jobInfo)
 	})
 
-	// Pod phase from Pending to Running.
+	// Task allocatable check.
 	ssn.AddAllocatableFn(p.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
 		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject task <%s/%s>.",
+				p.Name(), candidate.Namespace, candidate.Name,
+			)
 			return false
 		}
-		return true
+		return p.AllocatableFn(queue, candidate)
 	})
-
-	// ssn.AddAllocatableFn(cp.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
-	// 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
-	// 		klog.V(3).Infof("Queue <%s> current state: %s, cannot allocate task <%s>.", queue.Name, queue.Queue.Status.State, candidate.Name)
-	// 		return false
-	// 	}
-	// 	if !readyToSchedule {
-	// 		klog.V(3).Infof("Capacity plugin failed to check queue's hierarchical structure!")
-	// 		return false
-	// 	}
-	// 	if hierarchyEnabled && !cp.isLeafQueue(queue.UID) {
-	// 		klog.V(3).Infof("Queue <%s> is not a leaf queue, can not allocate task <%s>.", queue.Name, candidate.Name)
-	// 		return false
-	// 	}
-	//
-	// 	return cp.checkQueueAllocatableHierarchically(ssn, queue, candidate)
-	// })
 }
 
 // OnSessionClose cleans up the plugin state.

@@ -89,58 +89,65 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 }
 
 func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
-	jobMinResourceReq := job.GetMinResources()
+	var (
+		jobReqResource = job.GetMinResources()
+		realCapability = qAttr.realCapability
+		inuseResource  = jobReqResource.Clone().
+			Add(qAttr.allocated).
+			Add(qAttr.inqueue).
+			Sub(qAttr.elastic)
+	)
 	klog.V(5).Infof(
 		"Job %s min resource <%s>, queue %s capability <%s> allocated <%s> inqueue <%s> elastic <%s>",
-		job.Name, jobMinResourceReq.String(), qAttr.name,
-		qAttr.realCapability.String(),
+		job.Name, jobReqResource.String(), qAttr.name,
+		realCapability.String(),
 		qAttr.allocated.String(),
 		qAttr.inqueue.String(),
 		qAttr.elastic.String(),
 	)
-	inuseResource := jobMinResourceReq.Clone().
-		Add(qAttr.allocated).
-		Add(qAttr.inqueue).
-		Sub(qAttr.elastic)
 
 	if inuseResource == nil {
 		klog.V(5).Infof(
 			"Job <%s/%s>, Queue <%s> inuseResource is nil, allow it to enqueue",
-			qAttr.name, job.Namespace, job.Name,
+			job.Namespace, job.Name, qAttr.name,
 		)
 		return true
 	}
-	if qAttr.realCapability == nil {
+	if realCapability == nil {
 		klog.V(5).Infof(
 			"Job <%s/%s>, Queue <%s> realCapability is nil, allow it to enqueue",
-			qAttr.name, job.Namespace, job.Name,
+			job.Namespace, job.Name, qAttr.name,
 		)
 		return false
 	}
-	if jobMinResourceReq == nil {
-		if ok := inuseResource.LessEqual(qAttr.realCapability, api.Zero); !ok {
+	if jobReqResource == nil {
+		if ok := inuseResource.LessEqual(realCapability, api.Zero); !ok {
 			klog.V(5).Infof(
-				"Job <%s/%s>, Queue <%s> jobMinResourceReq <%s> is nil, allow it to enqueue",
-				qAttr.name, job.Namespace, job.Name, qAttr.realCapability.String(),
+				"Job <%s/%s>, Queue <%s> realCapability <%s> is empty, deny it to enqueue",
+				job.Namespace, job.Name, qAttr.name, realCapability.String(),
 			)
 			return false
 		}
+		klog.V(5).Infof(
+			"Job <%s/%s>, Queue <%s> jobReqResource is nil, allow it to enqueue",
+			job.Namespace, job.Name, qAttr.name,
+		)
 		return true
 	}
 
-	if jobMinResourceReq.MilliCPU > 0 && inuseResource.MilliCPU > qAttr.realCapability.MilliCPU {
+	if jobReqResource.MilliCPU > 0 && inuseResource.MilliCPU > realCapability.MilliCPU {
 		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> has no enough CPU, jobMinResourceReq <%v>, inuseResource <%v>, realCapability <%v>",
-			qAttr.name, job.Namespace, job.Name,
-			jobMinResourceReq.MilliCPU, inuseResource.MilliCPU, qAttr.realCapability.MilliCPU,
+			"Job <%s/%s>, Queue <%s> has no enough CPU, jobReqResource <%v>, inuseResource <%v>, realCapability <%v>",
+			job.Namespace, job.Name, qAttr.name,
+			jobReqResource.MilliCPU, inuseResource.MilliCPU, realCapability.MilliCPU,
 		)
 		return false
 	}
-	if jobMinResourceReq.Memory > 0 && inuseResource.Memory > qAttr.realCapability.Memory {
+	if jobReqResource.Memory > 0 && inuseResource.Memory > realCapability.Memory {
 		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> has no enough Memory, jobMinResourceReq <%v Mi>, inuseResource <%v Mi>, realCapability <%v Mi>",
-			qAttr.name, job.Namespace, job.Name,
-			jobMinResourceReq.Memory/1024/1024, inuseResource.Memory/1024/1024, qAttr.realCapability.Memory/1024/1024,
+			"Job <%s/%s>, Queue <%s> has no enough Memory, jobReqResource <%v Mi>, inuseResource <%v Mi>, realCapability <%v Mi>",
+			job.Namespace, job.Name, qAttr.name,
+			jobReqResource.Memory/1024/1024, inuseResource.Memory/1024/1024, realCapability.Memory/1024/1024,
 		)
 		return false
 	}
@@ -150,18 +157,18 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 		return true
 	}
 
-	for scalarName, scalarQuant := range jobMinResourceReq.ScalarResources {
+	for scalarName, scalarQuant := range jobReqResource.ScalarResources {
 		if api.IsIgnoredScalarResource(scalarName) {
 			continue
 		}
 		var (
 			inuseQuant          = inuseResource.ScalarResources[scalarName]
-			realCapabilityQuant = qAttr.realCapability.ScalarResources[scalarName]
+			realCapabilityQuant = realCapability.ScalarResources[scalarName]
 		)
 		if scalarQuant > 0 && inuseQuant > realCapabilityQuant {
 			klog.V(2).Infof(
-				"Job <%s/%s>, Queue <%s> has no enough %s, jobMinResourceReq <%v>, inuseResource <%v>, realCapability <%v>",
-				qAttr.name, job.Namespace, job.Name, scalarName,
+				"Job <%s/%s>, Queue <%s> has no enough %s, scalarQuant <%v>, inuseQuant <%v>, realCapability <%v>",
+				job.Namespace, job.Name, qAttr.name, scalarName,
 				scalarQuant, inuseQuant, realCapabilityQuant,
 			)
 			return false
