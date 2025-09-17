@@ -29,6 +29,7 @@ import (
 
 	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
+	`k8s.io/apimachinery/pkg/api/resource`
 	`k8s.io/apimachinery/pkg/labels`
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
@@ -40,6 +41,13 @@ import (
 type CardInfo struct {
 	Name   string // card name
 	Memory int64  // card memory in bytes
+}
+
+// NodeCardResourceInfo defines the card resource information of a node.
+type NodeCardResourceInfo struct {
+	CardInfo               CardInfo
+	CardResource           corev1.ResourceList
+	CardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 }
 
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
@@ -62,7 +70,11 @@ func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
 		addResourceList(
 			totalNormalResource, node.Status.Capacity.DeepCopy(),
 		)
-		p.buildCardResourceFromNode(totalCardResource, node)
+		nodeCardInfo := p.getCardResourceFromNode(node)
+		addResourceList(totalCardResource, nodeCardInfo.CardResource)
+		for cardName, resourceName := range nodeCardInfo.CardNameToResourceName {
+			p.cardNameToResourceName[cardName] = resourceName
+		}
 	}
 	p.totalResource = api.NewResource(totalNormalResource)
 	for resName, quantity := range totalCardResource {
@@ -70,38 +82,45 @@ func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
 	}
 }
 
-func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList, node *corev1.Node) {
-	cardInfo := p.getCardInfoFromNode(node)
+// getCardResourceFromNode gets the card resource from the node.
+func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo {
+	if nodeCardInfo, ok := p.nodeCardInfos[node.Name]; ok {
+		return nodeCardInfo
+	}
+	nodeCardInfo := NodeCardResourceInfo{
+		CardInfo:               p.getCardInfoFromNode(node),
+		CardResource:           map[corev1.ResourceName]resource.Quantity{},
+		CardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
+	}
 	for resName, cardCapacity := range node.Status.Capacity {
+		if cardCapacity.Value() <= 0 {
+			continue
+		}
 		// special MPS resource.
 		if isMpsResourceName(resName) {
-			if cardCapacity.Value() <= 0 {
-				continue
-			}
 			mpsReplicas := gconv.Int(node.Labels[MpsReplicaLabel])
 			if mpsReplicas > 0 {
 				cardName := fmt.Sprintf(
 					MpsSharedCardNamePattern,
-					cardInfo.Name,
-					int(math.Round(float64(cardInfo.Memory)/1024)), gconv.Int(mpsReplicas),
+					nodeCardInfo.CardInfo.Name,
+					int(math.Round(float64(nodeCardInfo.CardInfo.Memory)/1024)), gconv.Int(mpsReplicas),
 				)
-				totalCardResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
-				p.cardNameToResourceName[corev1.ResourceName(cardName)] = resName
+				cardResourceName := corev1.ResourceName(cardName)
+				nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+				nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
 			}
 			continue
 		}
 
 		// special MIG resource.
 		if isMigResourceName(resName) {
-			if cardCapacity.Value() <= 0 {
-				continue
-			}
 			var (
-				migSpec  = strings.TrimPrefix(string(resName), MigResourceNamePrefix)
-				cardName = fmt.Sprintf(MigSharedCardNamePattern, cardInfo.Name, migSpec)
+				migSpec          = strings.TrimPrefix(string(resName), MigLabelAndResourceNamePrefix)
+				cardName         = fmt.Sprintf(MigSharedCardNamePattern, nodeCardInfo.CardInfo.Name, migSpec)
+				cardResourceName = corev1.ResourceName(cardName)
 			)
-			totalCardResource[corev1.ResourceName(cardName)] = cardCapacity.DeepCopy()
-			p.cardNameToResourceName[corev1.ResourceName(cardName)] = resName
+			nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+			nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
 			continue
 		}
 
@@ -109,12 +128,15 @@ func (p *Plugin) buildCardResourceFromNode(totalCardResource corev1.ResourceList
 		// 2. parts are shared card resource, parts are whole card resource
 		for _, resourcePrefix := range p.resourcePrefixes {
 			if strings.HasPrefix(string(resName), resourcePrefix) && cardCapacity.Value() > 0 {
-				totalCardResource[corev1.ResourceName(cardInfo.Name)] = cardCapacity.DeepCopy()
-				p.cardNameToResourceName[corev1.ResourceName(cardInfo.Name)] = resName
+				cardResourceName := corev1.ResourceName(nodeCardInfo.CardInfo.Name)
+				nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+				nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
 				break
 			}
 		}
 	}
+	p.nodeCardInfos[node.Name] = nodeCardInfo
+	return nodeCardInfo
 }
 
 func (p *Plugin) getCardInfoFromNode(node *corev1.Node) CardInfo {
@@ -126,6 +148,9 @@ func (p *Plugin) getCardInfoFromNode(node *corev1.Node) CardInfo {
 
 func (p *Plugin) getCardNameFromNode(node *corev1.Node) string {
 	for k, v := range node.Labels {
+		if strings.Contains(k, MigLabelAndResourceNamePrefix) {
+			continue
+		}
 		for _, resourcePrefix := range p.resourcePrefixes {
 			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".product") {
 				return v
@@ -139,7 +164,7 @@ func (p *Plugin) getCardMemoryFromNode(node *corev1.Node) int64 {
 	for k, v := range node.Labels {
 		for _, resourcePrefix := range p.resourcePrefixes {
 			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".memory") {
-				return gconv.Int64(v) * 1024 * 1024
+				return gconv.Int64(v)
 			}
 		}
 	}
@@ -153,7 +178,7 @@ func isMpsResourceName(resourceName corev1.ResourceName) bool {
 
 // isMigResourceName checks if the resource name is MIG resource name.
 func isMigResourceName(resourceName corev1.ResourceName) bool {
-	return strings.HasPrefix(string(resourceName), MigResourceNamePrefix)
+	return strings.HasPrefix(string(resourceName), MigLabelAndResourceNamePrefix)
 }
 
 func addResourceList(total corev1.ResourceList, add corev1.ResourceList) {

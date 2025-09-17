@@ -23,6 +23,8 @@ limitations under the License.
 package capacitycard
 
 import (
+	`fmt`
+
 	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
 	v1 `k8s.io/client-go/listers/core/v1`
@@ -33,18 +35,18 @@ import (
 )
 
 const (
-	PluginName                  = "capacity-card"
-	MPSResourceName             = "nvidia.com/gpu.shared"
-	MpsReplicaLabel             = "nvidia.com/gpu.replicas"
-	MpsSharedCardNamePattern    = "%s/mps-%dg*1/%d"
-	MigSharedCardNamePattern    = "%s/mig-%s-mixed"
-	MigResourceNamePrefix       = "nvidia.com/mig-"
-	QueueAnnotationKeyCardQuota = "volcano.sh/card.quota"
-	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
-	TaskAnnotationKeyCardName   = "volcano.sh/card.name"
-	MultiCardSeparator          = "|"
-	configResourcePrefixesName  = "resourcePrefixes"
-	cardCountQuantityMultiplier = 1000
+	PluginName                    = "capacity-card"
+	MPSResourceName               = "nvidia.com/gpu.shared"
+	MpsReplicaLabel               = "nvidia.com/gpu.replicas"
+	MpsSharedCardNamePattern      = "%s/mps-%dg*1/%d"
+	MigSharedCardNamePattern      = "%s/mig-%s-mixed"
+	MigLabelAndResourceNamePrefix = "nvidia.com/mig-"
+	QueueAnnotationKeyCardQuota   = "volcano.sh/card.quota"
+	JobAnnotationKeyCardRequest   = "volcano.sh/card.request"
+	TaskAnnotationKeyCardName     = "volcano.sh/card.name"
+	MultiCardSeparator            = "|"
+	configResourcePrefixesName    = "resourcePrefixes"
+	cardCountQuantityMultiplier   = 1000
 )
 
 // Plugin implements the capacity plugin.
@@ -52,8 +54,9 @@ type Plugin struct {
 	queueOpts              map[api.QueueID]*queueAttr
 	totalResource          *api.Resource
 	totalGuarantee         *api.Resource
-	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 	nodeLister             v1.NodeLister
+	nodeCardInfos          map[string]NodeCardResourceInfo
+	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 	arguments              framework.Arguments
 	resourcePrefixes       []string
 }
@@ -64,6 +67,7 @@ func New(arguments framework.Arguments) framework.Plugin {
 		queueOpts:              map[api.QueueID]*queueAttr{},
 		totalResource:          api.EmptyResource(),
 		totalGuarantee:         api.EmptyResource(),
+		nodeCardInfos:          map[string]NodeCardResourceInfo{},
 		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
 		arguments:              arguments,
 		resourcePrefixes:       gconv.Strings(arguments[configResourcePrefixesName]),
@@ -112,6 +116,28 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		}
 		return p.AllocatableFn(queue, candidate)
 	})
+
+	// Node filter specially for multi-card tasks.
+	ssn.AddPredicateFn(p.Name(), func(ti *api.TaskInfo, ni *api.NodeInfo) error {
+		if !readyToSchedule {
+			return fmt.Errorf(
+				"plugin <%s> is not ready to schedule, reject task <%s/%s>",
+				p.Name(), ti.Namespace, ti.Name,
+			)
+		}
+		return p.PredicateFn(ssn, ti, ni)
+	})
+
+	// It updates the queue's allocated resource and share
+	// when a task is allocated or deallocated duration plugin executing.
+	ssn.AddEventHandler(&framework.EventHandler{
+		AllocateFunc: func(event *framework.Event) {
+			p.OnAllocate(ssn, event)
+		},
+		DeallocateFunc: func(event *framework.Event) {
+			p.OnDeallocate(ssn, event)
+		},
+	})
 }
 
 // OnSessionClose cleans up the plugin state.
@@ -119,5 +145,6 @@ func (p *Plugin) OnSessionClose(_ *framework.Session) {
 	p.queueOpts = nil
 	p.totalResource = nil
 	p.totalGuarantee = nil
+	p.nodeCardInfos = nil
 	p.cardNameToResourceName = nil
 }

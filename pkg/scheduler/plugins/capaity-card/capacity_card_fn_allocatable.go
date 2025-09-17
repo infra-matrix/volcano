@@ -46,7 +46,7 @@ func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bo
 func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 	var (
 		taskReqResource  = ti.Resreq
-		realCapability   = qAttr.realCapability
+		queueCapability  = qAttr.capability
 		toBeUsedResource = qAttr.allocated.Clone().Add(taskReqResource)
 	)
 	if toBeUsedResource == nil {
@@ -56,18 +56,11 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		)
 		return true
 	}
-	if realCapability == nil {
-		klog.V(5).Infof(
-			"Task <%s/%s>, Queue <%s> realCapability is nil, allow it to allocate",
-			ti.Namespace, ti.Name, qAttr.name,
-		)
-		return false
-	}
 	if taskReqResource == nil {
-		if ok := toBeUsedResource.LessEqual(realCapability, api.Zero); !ok {
+		if ok := toBeUsedResource.LessEqual(queueCapability, api.Zero); !ok {
 			klog.V(5).Infof(
-				"Task <%s/%s>, Queue <%s> realCapability <%s> is empty, deny it to enqueue",
-				ti.Namespace, ti.Name, qAttr.name, realCapability.String(),
+				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
+				ti.Namespace, ti.Name, qAttr.name, queueCapability.String(),
 			)
 			return false
 		}
@@ -78,19 +71,19 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		return true
 	}
 
-	if taskReqResource.MilliCPU > 0 && toBeUsedResource.MilliCPU > realCapability.MilliCPU {
+	if taskReqResource.MilliCPU > 0 && toBeUsedResource.MilliCPU > queueCapability.MilliCPU {
 		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, totalToBeUsed <%v>, realCapability <%v>",
+			"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, totalToBeUsed <%v>, capability <%v>",
 			ti.Namespace, ti.Name, qAttr.name,
-			taskReqResource.MilliCPU, toBeUsedResource.MilliCPU, realCapability.MilliCPU,
+			taskReqResource.MilliCPU, toBeUsedResource.MilliCPU, queueCapability.MilliCPU,
 		)
 		return false
 	}
-	if taskReqResource.Memory > 0 && toBeUsedResource.Memory > realCapability.Memory {
+	if taskReqResource.Memory > 0 && toBeUsedResource.Memory > queueCapability.Memory {
 		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, totalToBeUsed <%v Mi>, realCapability <%v Mi>",
+			"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, totalToBeUsed <%v Mi>, capability <%v Mi>",
 			ti.Namespace, ti.Name, qAttr.name,
-			taskReqResource.Memory/1024/1024, toBeUsedResource.Memory/1024/1024, realCapability.Memory/1024/1024,
+			taskReqResource.Memory/1024/1024, toBeUsedResource.Memory/1024/1024, queueCapability.Memory/1024/1024,
 		)
 		return false
 	}
@@ -105,13 +98,13 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, toBeUsedResource, realCapability,
+			scalarName, scalarQuant, toBeUsedResource, queueCapability,
 		)
 		if checkResult.Ok {
 			continue
 		}
 		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough %s, request <%v>, totalToBeUsed <%v>, realCapability <%v>",
+			"Task <%s/%s>, Queue <%s> has no enough %s, request <%v>, totalToBeUsed <%v>, capability <%v>",
 			ti.Namespace, ti.Name, qAttr.name,
 			checkResult.NoEnoughScalarName,
 			checkResult.NoEnoughScalarCount,

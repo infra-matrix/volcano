@@ -32,19 +32,10 @@ import (
 	`volcano.sh/volcano/pkg/scheduler/api`
 )
 
-// NewQueueResourceSupportingCard creates a new resource object from resource list
-func NewQueueResourceSupportingCard(q *scheduling.Queue, rl v1.ResourceList) *api.Resource {
-	var (
-		queueResource     = api.NewResource(rl)
-		queueCardResource = GetCardResourceFromAnnotations(q.Annotations, QueueAnnotationKeyCardQuota)
-	)
-	if queueResource.ScalarResources == nil {
-		queueResource.ScalarResources = make(map[v1.ResourceName]float64)
-	}
-	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
-		queueResource.ScalarResources[cardName] = cardCountMilli
-	}
-	return queueResource
+// QueueHasCardQuota checks whether the queue has card quota annotation.
+func QueueHasCardQuota(q *scheduling.Queue) bool {
+	_, ok := q.Annotations[QueueAnnotationKeyCardQuota]
+	return ok
 }
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.

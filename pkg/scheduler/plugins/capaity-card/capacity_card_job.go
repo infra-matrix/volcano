@@ -98,13 +98,21 @@ func (ji *JobInfo) GetElasticResources() *api.Resource {
 	return elastic
 }
 
+// getCardNameFromTask retrieves the card name from task's pod annotations.
+func (p *Plugin) getCardNameFromTask(ti *api.TaskInfo) string {
+	if ti.Pod == nil {
+		return ""
+	}
+	return ti.Pod.Annotations[TaskAnnotationKeyCardName]
+}
+
 // getCardResourceFromTask retrieves the card resource from task's pod annotations and requests/limits.
 func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error) {
 	if ti.Pod == nil {
 		return api.EmptyResource(), nil
 	}
 
-	cardName := ti.Pod.Annotations[TaskAnnotationKeyCardName]
+	cardName := p.getCardNameFromTask(ti)
 	if cardName == "" {
 		// no card requested, might be CPU type task.
 		return api.EmptyResource(), nil
@@ -112,24 +120,55 @@ func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error
 
 	// if multi-cards are requested, retrieve the confirmed card name from bound node.
 	if strings.Contains(cardName, MultiCardSeparator) {
+		multiCardNames := strings.Split(cardName, MultiCardSeparator)
 		if ti.Pod.Spec.NodeName == "" {
-			return api.EmptyResource(), nil
+			podCardResource, err := p.getCardResourceFromTaskPod(multiCardNames[0], ti.Pod)
+			if err != nil {
+				return api.EmptyResource(), err
+			}
+			for _, scalarCount := range podCardResource.ScalarResources {
+				// change to multi-card resource.
+				return &api.Resource{
+					ScalarResources: map[v1.ResourceName]float64{
+						v1.ResourceName(cardName): scalarCount,
+					},
+				}, nil
+			}
 		}
-		node, err := p.nodeLister.Get(ti.Pod.Spec.NodeName)
-		if err != nil {
-			return api.EmptyResource(), fmt.Errorf(
-				"failed to get node <%s> for task <%s/%s>: %+v",
-				ti.Pod.Spec.NodeName, ti.Namespace, ti.Name, err,
-			)
+		return p.getCardResourceFromNodeNameForMultiCardTask(ti, cardName)
+	}
+	return p.getCardResourceFromTaskPod(cardName, ti.Pod)
+}
+
+func (p *Plugin) getCardResourceFromNodeNameForMultiCardTask(
+	ti *api.TaskInfo, multiCardName string,
+) (*api.Resource, error) {
+	// already bound to certain node, retrieve the real card name from node label.
+	node, err := p.nodeLister.Get(ti.Pod.Spec.NodeName)
+	if err != nil {
+		return api.EmptyResource(), fmt.Errorf(
+			"failed to get node <%s> for task <%s/%s>: %+v",
+			ti.Pod.Spec.NodeName, ti.Namespace, ti.Name, err,
+		)
+	}
+	nodeCardInfo := p.getCardResourceFromNode(node)
+	for _, singleCardName := range strings.Split(multiCardName, MultiCardSeparator) {
+		if _, ok := nodeCardInfo.CardNameToResourceName[v1.ResourceName(singleCardName)]; ok {
+			podCardResource, err := p.getCardResourceFromTaskPod(singleCardName, ti.Pod)
+			if err == nil {
+				return podCardResource, nil
+			}
 		}
-		cardInfo := p.getCardInfoFromNode(node)
-		if cardInfo.Name == "" {
-			return api.EmptyResource(), fmt.Errorf(
-				"no card info found from node <%s> for task <%s/%s>",
-				node.Name, ti.Namespace, ti.Name,
-			)
-		}
-		cardName = cardInfo.Name
+	}
+	return api.EmptyResource(), fmt.Errorf(
+		"no valid card found on node <%s> for task <%s/%s> with multi-card name <%s>",
+		node.Name, ti.Namespace, ti.Name, multiCardName,
+	)
+}
+
+func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.Resource, error) {
+	if pod == nil {
+		return api.EmptyResource(), fmt.Errorf("invalid parameter: pod is nil")
 	}
 
 	// retrieve resource quantity from requests/limits.
@@ -137,7 +176,7 @@ func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error
 	if !ok {
 		return api.EmptyResource(), fmt.Errorf("no resource name found for card <%s>", cardName)
 	}
-	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(ti.Pod)
+	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(pod)
 	if quantity, found := podLimits[cardResourceName]; found {
 		return &api.Resource{
 			ScalarResources: map[v1.ResourceName]float64{
