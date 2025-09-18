@@ -35,10 +35,11 @@ import (
 // especially card resource is being allocated during current scheduling session.
 func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 	var (
-		task         = event.Task
-		taskJob      = ssn.Jobs[event.Task.Job]
-		taskCardName = p.getCardNameFromTask(task)
-		qAttr        = p.queueOpts[taskJob.Queue]
+		task            = event.Task
+		taskJob         = ssn.Jobs[task.Job]
+		taskCardName    = p.getCardNameFromTask(task)
+		taskReqResource = task.Resreq
+		qAttr           = p.queueOpts[taskJob.Queue]
 	)
 
 	// if multi-cards requested, it converts multi-cards resource to real card resource.
@@ -53,10 +54,12 @@ func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 			)
 			return
 		}
-		qAttr.allocated.Add(cardResource)
-	} else {
-		qAttr.allocated.Add(task.Resreq)
+		taskReqResource = taskReqResource.Clone()
+		for scalarName, scalarCount := range cardResource.ScalarResources {
+			taskReqResource.SetScalar(scalarName, scalarCount)
+		}
 	}
+	qAttr.allocated.Add(taskReqResource)
 
 	metrics.UpdateQueueAllocated(
 		qAttr.name, qAttr.allocated.MilliCPU, qAttr.allocated.Memory, qAttr.allocated.ScalarResources,
@@ -64,17 +67,18 @@ func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 	p.updateShare(qAttr)
 	klog.V(4).Infof(
 		"Capacity AllocateFunc: task <%v/%v>, resreq <%v>, share <%v>",
-		task.Namespace, task.Name, task.Resreq, qAttr.share,
+		task.Namespace, task.Name, taskReqResource, qAttr.share,
 	)
 }
 
 // OnDeallocate is invoked when a task is deallocated.
 func (p *Plugin) OnDeallocate(ssn *framework.Session, event *framework.Event) {
 	var (
-		task         = event.Task
-		taskJob      = ssn.Jobs[event.Task.Job]
-		taskCardName = p.getCardNameFromTask(task)
-		qAttr        = p.queueOpts[taskJob.Queue]
+		task            = event.Task
+		taskJob         = ssn.Jobs[task.Job]
+		taskCardName    = p.getCardNameFromTask(task)
+		taskReqResource = task.Resreq
+		qAttr           = p.queueOpts[taskJob.Queue]
 	)
 
 	// if multi-cards requested, it converts multi-cards resource to real card resource.
@@ -89,16 +93,18 @@ func (p *Plugin) OnDeallocate(ssn *framework.Session, event *framework.Event) {
 			)
 			return
 		}
-		qAttr.allocated.Sub(cardResource)
-	} else {
-		qAttr.allocated.Sub(task.Resreq)
+		taskReqResource = taskReqResource.Clone()
+		for scalarName, scalarCount := range cardResource.ScalarResources {
+			taskReqResource.SetScalar(scalarName, scalarCount)
+		}
 	}
+	qAttr.allocated.Sub(taskReqResource)
 
 	metrics.UpdateQueueAllocated(
 		qAttr.name, qAttr.allocated.MilliCPU, qAttr.allocated.Memory, qAttr.allocated.ScalarResources,
 	)
 	klog.V(4).Infof(
 		"Capacity EvictFunc: task <%v/%v>, resreq <%v>, share <%v>",
-		task.Namespace, task.Name, task.Resreq, qAttr.share,
+		task.Namespace, task.Name, taskReqResource, qAttr.share,
 	)
 }
