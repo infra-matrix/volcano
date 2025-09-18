@@ -25,6 +25,8 @@ package capacitycard
 import (
 	`fmt`
 	`math`
+	`regexp`
+	`strconv`
 	`strings`
 
 	`github.com/gogf/gf/v2/util/gconv`
@@ -39,8 +41,10 @@ import (
 // CardInfo defines the basic information of a card.
 // One node only has one type of card.
 type CardInfo struct {
-	Name   string // card name
-	Memory int64  // card memory in bytes
+	Name           string // card name
+	Count          int64  // card count in board slots(PCIE/SXM,etc.)
+	Memory         int64  // card memory in bytes
+	ResourcePrefix string // resource prefix, e.g. nvidia.com
 }
 
 // NodeCardResourceInfo defines the card resource information of a node.
@@ -49,6 +53,10 @@ type NodeCardResourceInfo struct {
 	CardResource           corev1.ResourceList
 	CardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 }
+
+var (
+	nodeCardProductLabelRegex = regexp.MustCompile(`^((.+?)/(\w+))\.product$`)
+)
 
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 	p.nodeLister = ssn.InformerFactory().Core().V1().Nodes().Lister()
@@ -126,13 +134,11 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 
 		// 1. whole card resource
 		// 2. parts are shared card resource, parts are whole card resource
-		for _, resourcePrefix := range p.resourcePrefixes {
-			if strings.HasPrefix(string(resName), resourcePrefix) && cardCapacity.Value() > 0 {
-				cardResourceName := corev1.ResourceName(nodeCardInfo.CardInfo.Name)
-				nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
-				nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
-				break
-			}
+		if strings.HasPrefix(string(resName), nodeCardInfo.CardInfo.ResourcePrefix) && cardCapacity.Value() > 0 {
+			cardResourceName := corev1.ResourceName(nodeCardInfo.CardInfo.Name)
+			nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+			nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
+			break
 		}
 	}
 	p.nodeCardInfos[node.Name] = nodeCardInfo
@@ -140,35 +146,39 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 }
 
 func (p *Plugin) getCardInfoFromNode(node *corev1.Node) CardInfo {
-	return CardInfo{
-		Name:   p.getCardNameFromNode(node),
-		Memory: p.getCardMemoryFromNode(node),
-	}
-}
-
-func (p *Plugin) getCardNameFromNode(node *corev1.Node) string {
 	for k, v := range node.Labels {
 		if strings.Contains(k, MigLabelAndResourceNamePrefix) {
 			continue
 		}
-		for _, resourcePrefix := range p.resourcePrefixes {
-			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".product") {
-				return v
+		match := nodeCardProductLabelRegex.FindStringSubmatch(k)
+		if len(match) == 4 {
+			var (
+				labelPrefix    = match[1]                              // eg: nvidia.com/gpu
+				resourcePrefix = match[2]                              // eg: nvidia.com
+				countLabel     = fmt.Sprintf("%s.count", labelPrefix)  // eg: nvidia.com/gpu.count
+				memoryLabel    = fmt.Sprintf("%s.memory", labelPrefix) // eg: nvidia.com/gpu.memory
+				cardCount      = node.Labels[countLabel]               // eg: 8
+				cardMemory     = node.Labels[memoryLabel]              // eg: 81920 (in MB)
+			)
+			if cardCount != "" && cardMemory != "" {
+				cardCountInt64, err := strconv.ParseInt(cardCount, 10, 64)
+				if err != nil {
+					klog.Errorf("Failed to parse label %s: %+v", countLabel, err)
+				}
+				cardMemoryInt64, err := strconv.ParseInt(cardMemory, 10, 64)
+				if err != nil {
+					klog.Errorf("Failed to parse label %s: %+v", cardMemory, err)
+				}
+				return CardInfo{
+					Name:           v,
+					Count:          cardCountInt64,
+					Memory:         cardMemoryInt64,
+					ResourcePrefix: resourcePrefix,
+				}
 			}
 		}
 	}
-	return ""
-}
-
-func (p *Plugin) getCardMemoryFromNode(node *corev1.Node) int64 {
-	for k, v := range node.Labels {
-		for _, resourcePrefix := range p.resourcePrefixes {
-			if strings.HasPrefix(k, resourcePrefix) && strings.HasSuffix(k, ".memory") {
-				return gconv.Int64(v)
-			}
-		}
-	}
-	return 0
+	return CardInfo{}
 }
 
 // isMpsResourceName checks if the resource name is MPS resource name.

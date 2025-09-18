@@ -25,7 +25,6 @@ package capacitycard
 import (
 	`fmt`
 
-	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
 	v1 `k8s.io/client-go/listers/core/v1`
 	`k8s.io/klog/v2`
@@ -57,20 +56,16 @@ type Plugin struct {
 	nodeLister             v1.NodeLister
 	nodeCardInfos          map[string]NodeCardResourceInfo
 	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
-	arguments              framework.Arguments
-	resourcePrefixes       []string
 }
 
 // New return capacity plugin.
-func New(arguments framework.Arguments) framework.Plugin {
+func New(_ framework.Arguments) framework.Plugin {
 	return &Plugin{
 		queueOpts:              map[api.QueueID]*queueAttr{},
 		totalResource:          api.EmptyResource(),
 		totalGuarantee:         api.EmptyResource(),
 		nodeCardInfos:          map[string]NodeCardResourceInfo{},
 		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
-		arguments:              arguments,
-		resourcePrefixes:       gconv.Strings(arguments[configResourcePrefixesName]),
 	}
 }
 
