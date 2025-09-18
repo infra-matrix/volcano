@@ -149,11 +149,13 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 
 		// 1. whole card resource
 		// 2. parts are shared card resource, parts are whole card resource
-		if strings.HasPrefix(string(resName), nodeCardInfo.CardInfo.ResourcePrefix) && cardCapacity.Value() > 0 {
-			cardResourceName := corev1.ResourceName(nodeCardInfo.CardInfo.Name)
-			nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
-			nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
-			break
+		if nodeCardInfo.CardInfo.ResourcePrefix != "" {
+			if strings.HasPrefix(string(resName), nodeCardInfo.CardInfo.ResourcePrefix) && cardCapacity.Value() > 0 {
+				cardResourceName := corev1.ResourceName(nodeCardInfo.CardInfo.Name)
+				nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+				nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
+				continue
+			}
 		}
 	}
 	p.nodeCardInfos[node.Name] = nodeCardInfo

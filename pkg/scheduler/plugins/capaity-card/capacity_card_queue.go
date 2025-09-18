@@ -198,6 +198,10 @@ func (p *Plugin) newQueueResourceSupportingCard(q *scheduling.Queue, rl v1.Resou
 	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
 		queueResource.ScalarResources[cardName] = cardCountMilli
 		cardResourceName := p.cardNameToResourceName[cardName]
+		if cardResourceName == "" {
+			klog.Warningf("No resource name found for card <%s> in queue <%s>", cardName, q.Name)
+			continue
+		}
 		queueResource.ScalarResources[cardResourceName] += cardCountMilli
 	}
 	return queueResource
