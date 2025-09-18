@@ -29,7 +29,6 @@ import (
 	`strconv`
 	`strings`
 
-	`github.com/gogf/gf/v2/util/gconv`
 	corev1 `k8s.io/api/core/v1`
 	`k8s.io/apimachinery/pkg/api/resource`
 	`k8s.io/apimachinery/pkg/labels`
@@ -115,12 +114,19 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 		}
 		// special MPS resource.
 		if isMpsResourceName(resName) {
-			mpsReplicas := gconv.Int(node.Labels[MpsReplicaLabel])
+			mpsReplicas, err := strconv.Atoi(node.Labels[MpsReplicaLabel])
+			if err != nil {
+				klog.Errorf(
+					"Failed to parse MPS replica label %s: %+v",
+					node.Labels[MpsReplicaLabel], err,
+				)
+			}
 			if mpsReplicas > 0 {
 				cardName := fmt.Sprintf(
 					MpsSharedCardNamePattern,
 					nodeCardInfo.CardInfo.Name,
-					int(math.Round(float64(nodeCardInfo.CardInfo.Memory)/1024)), gconv.Int(mpsReplicas),
+					int(math.Round(float64(nodeCardInfo.CardInfo.Memory)/1024)),
+					mpsReplicas,
 				)
 				cardResourceName := corev1.ResourceName(cardName)
 				nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
