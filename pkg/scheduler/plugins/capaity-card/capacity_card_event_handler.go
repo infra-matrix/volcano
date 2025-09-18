@@ -31,6 +31,8 @@ import (
 )
 
 // OnAllocate is invoked when a task is allocated.
+// This callback handler is very critical for capacity plugin to maintain the queue allocated resource,
+// especially card resource is being allocated during current scheduling session.
 func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 	var (
 		task         = event.Task
@@ -39,7 +41,9 @@ func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 		qAttr        = p.queueOpts[taskJob.Queue]
 	)
 
-	// if no multi-cards requested, no need to check here.
+	// if multi-cards requested, it converts multi-cards resource to real card resource.
+	// for example, if a task requests "NVIDIA-H20|NVIDIA-H200" in its annotation,
+	// and it here converts it to real card resource according to the node it is allocated on.
 	if strings.Contains(taskCardName, MultiCardSeparator) {
 		cardResource, err := p.getCardResourceFromNodeNameForMultiCardTask(task, taskCardName)
 		if err != nil {
@@ -73,7 +77,9 @@ func (p *Plugin) OnDeallocate(ssn *framework.Session, event *framework.Event) {
 		qAttr        = p.queueOpts[taskJob.Queue]
 	)
 
-	// if no multi-cards requested, no need to check here.
+	// if multi-cards requested, it converts multi-cards resource to real card resource.
+	// for example, if a task requests "NVIDIA-H20|NVIDIA-H200" in its annotation,
+	// and it here converts it to real card resource according to the node it is allocated on.
 	if strings.Contains(taskCardName, MultiCardSeparator) {
 		cardResource, err := p.getCardResourceFromNodeNameForMultiCardTask(task, taskCardName)
 		if err != nil {

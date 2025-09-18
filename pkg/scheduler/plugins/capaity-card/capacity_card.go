@@ -34,18 +34,42 @@ import (
 )
 
 const (
-	PluginName                    = "capacity-card"
-	MPSResourceName               = "nvidia.com/gpu.shared"
-	MpsReplicaLabel               = "nvidia.com/gpu.replicas"
-	MpsSharedCardNamePattern      = "%s/mps-%dg*1/%d"
-	MigSharedCardNamePattern      = "%s/mig-%s-mixed"
+	// PluginName indicates name of volcano scheduler plugin.
+	PluginName = "capacity-card"
+
+	// MPSResourceName is the fixed resource name for GPU mps card. e.g. nvidia.com/gpu.shared
+	MPSResourceName = "nvidia.com/gpu.shared"
+
+	// MpsReplicaLabel is the fixed label for GPU mps replica number. e.g. nvidia.com/gpu.replicas=2
+	MpsReplicaLabel = "nvidia.com/gpu.replicas"
+
+	// MpsSharedCardNamePattern is the fixed naming pattern for mps card name. e.g. nvidia.com/mps-2g*1/2
+	MpsSharedCardNamePattern = "%s/mps-%dg*1/%d"
+
+	// MigSharedCardNamePattern is the fixed naming pattern for mig card name. e.g. nvidia.com/mig-1g.12gb-mixed
+	MigSharedCardNamePattern = "%s/mig-%s-mixed"
+
+	// MigLabelAndResourceNamePrefix is the fixed prefix for GPU mig label and resource name.
 	MigLabelAndResourceNamePrefix = "nvidia.com/mig-"
-	QueueAnnotationKeyCardQuota   = "volcano.sh/card.quota"
-	JobAnnotationKeyCardRequest   = "volcano.sh/card.request"
-	TaskAnnotationKeyCardName     = "volcano.sh/card.name"
-	MultiCardSeparator            = "|"
-	configResourcePrefixesName    = "resourcePrefixes"
-	cardCountQuantityMultiplier   = 1000
+
+	// QueueAnnotationKeyCardQuota is the annotation keys of queue and job for card resources.
+	// This annotation is added to queue's capability and guarantee during queue creation.
+	QueueAnnotationKeyCardQuota = "volcano.sh/card.quota"
+
+	// JobAnnotationKeyCardRequest is the annotation keys of queue and job for card resources.
+	// This annotation is for job-level card request pre-check purpose.
+	JobAnnotationKeyCardRequest = "volcano.sh/card.request"
+
+	// TaskAnnotationKeyCardName is the annotation key of task for card name request.
+	TaskAnnotationKeyCardName = "volcano.sh/card.name"
+
+	// MultiCardSeparator is the separator for multi-card request in task annotation.
+	MultiCardSeparator = "|"
+
+	// cardCountQuantityMultiplier is used to convert card count to resource quantity in milli.
+	// As all volcano scalar resource quantity is in milli, we use 1000 as multiplier.
+	// For example, if a task requests 2 cards, it will be converted to 2000 in scalar resource quantity.
+	cardCountQuantityMultiplier = 1000
 )
 
 // Plugin implements the capacity plugin.

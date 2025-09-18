@@ -34,13 +34,17 @@ import (
 // JobInfo describes the job used in capacity plugin.
 type JobInfo struct {
 	*api.JobInfo
-	jobCardResource *api.Resource
+
+	// preCheckCardResource is the card resource retrieved from job annotation for pre-check purpose.
+	// Pre-check will prevent pending pod created(working in JobEnqueueableFn) when queue has no enough card resource.
+	// It is suggested to set this annotation for jobs which need card resource, although it is optional.
+	preCheckCardResource *api.Resource
 }
 
 // NewJobInfo creates a JobInfo instance.
 func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 	// read card request from Job(PodGroup).
-	jobCardResource := GetCardResourceFromAnnotations(
+	preCheckCardResource := GetCardResourceFromAnnotations(
 		job.PodGroup.Annotations,
 		JobAnnotationKeyCardRequest,
 	)
@@ -58,6 +62,7 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 			// re-calculate the card request for task.
 			// this task info resource assignment will update the queue.Status.Allocated after session close.
 			for scalarName, scalarCount := range taskCardResource.ScalarResources {
+				// Note: this scalar setting will update the queue.Status.Allocated after session close.
 				ti.Resreq.SetScalar(scalarName, scalarCount)
 			}
 			job.Tasks[taskId] = ti
@@ -67,22 +72,22 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		}
 	}
 	if realCardRequest.IsEmpty() {
-		job.TotalRequest.Add(jobCardResource)
+		job.TotalRequest.Add(preCheckCardResource)
 	} else {
-		jobCardResource = realCardRequest
+		preCheckCardResource = realCardRequest
 		job.TotalRequest.Add(realCardRequest)
 	}
 
 	return &JobInfo{
-		JobInfo:         job,
-		jobCardResource: jobCardResource,
+		JobInfo:              job,
+		preCheckCardResource: preCheckCardResource,
 	}, nil
 }
 
 // GetMinResources return the min resources of PodGroup.
 func (ji *JobInfo) GetMinResources() *api.Resource {
 	jobResource := ji.JobInfo.GetMinResources()
-	jobResource.Add(ji.jobCardResource)
+	jobResource.Add(ji.preCheckCardResource)
 	return jobResource
 }
 
@@ -140,6 +145,8 @@ func (p *Plugin) getCardResourceFromTask(ti *api.TaskInfo) (*api.Resource, error
 	return p.getCardResourceFromTaskPod(cardName, ti.Pod)
 }
 
+// getCardResourceFromNodeNameForMultiCardTask retrieves the real card resource from node label if pod is
+// already bound to certain node.
 func (p *Plugin) getCardResourceFromNodeNameForMultiCardTask(
 	ti *api.TaskInfo, multiCardName string,
 ) (*api.Resource, error) {
@@ -151,8 +158,11 @@ func (p *Plugin) getCardResourceFromNodeNameForMultiCardTask(
 			ti.Pod.Spec.NodeName, ti.Namespace, ti.Name, err,
 		)
 	}
-	nodeCardInfo := p.getCardResourceFromNode(node)
-	for _, singleCardName := range strings.Split(multiCardName, MultiCardSeparator) {
+	var (
+		nodeCardInfo   = p.getCardResourceFromNode(node)
+		multiCardNames = strings.Split(multiCardName, MultiCardSeparator)
+	)
+	for _, singleCardName := range multiCardNames {
 		if _, ok := nodeCardInfo.CardNameToResourceName[v1.ResourceName(singleCardName)]; ok {
 			podCardResource, err := p.getCardResourceFromTaskPod(singleCardName, ti.Pod)
 			if err == nil {
@@ -166,16 +176,22 @@ func (p *Plugin) getCardResourceFromNodeNameForMultiCardTask(
 	)
 }
 
+// getCardResourceFromTaskPod retrieves the card resource from task's pod requests/limits.
 func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.Resource, error) {
 	if pod == nil {
 		return api.EmptyResource(), fmt.Errorf("invalid parameter: pod is nil")
 	}
 
-	// retrieve resource quantity from requests/limits.
+	// retrieve card resource name from requests/limits.
+	// eg: cardName is "NVIDIA-H200", the resource name in requests/limits is "nvidia.com/gpu".
 	cardResourceName, ok := p.cardNameToResourceName[v1.ResourceName(cardName)]
 	if !ok {
 		return api.EmptyResource(), fmt.Errorf("no resource name found for card <%s>", cardName)
 	}
+	// retrieve card count from requests/limits by card resource name.
+	// eg: card name is "NVIDIA-H200", resource name is "nvidia.com/gpu",
+	// the "nvidia.com/gpu" count is 2 in pod requests/limits,
+	// then the "NVIDIA-H200" card count is 2.
 	podRequests, podLimits := resourcehelper.PodRequestsAndLimits(pod)
 	if quantity, found := podLimits[cardResourceName]; found {
 		return &api.Resource{

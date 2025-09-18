@@ -34,8 +34,8 @@ import (
 func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
 		klog.V(3).Infof(
-			"Queue <%s> current state: %s, cannot allocate task <%s>.",
-			queue.Name, queue.Queue.Status.State, candidate.Name,
+			"Queue <%s> current state: %s, cannot allocate task <%s/%s>.",
+			queue.Name, queue.Queue.Status.State, candidate.Namespace, candidate.Name,
 		)
 		return false
 	}
@@ -59,13 +59,13 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 	if taskReqResource == nil {
 		if ok := toBeUsedResource.LessEqual(queueCapability, api.Zero); !ok {
 			klog.V(5).Infof(
-				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
+				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to allocate",
 				ti.Namespace, ti.Name, qAttr.name, queueCapability.String(),
 			)
 			return false
 		}
 		klog.V(5).Infof(
-			"Task <%s/%s>, Queue <%s> request is nil, allow it to enqueue",
+			"Task <%s/%s>, Queue <%s> request is nil, allow it to allocate",
 			ti.Namespace, ti.Name, qAttr.name,
 		)
 		return true

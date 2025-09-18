@@ -49,15 +49,23 @@ type CardInfo struct {
 
 // NodeCardResourceInfo defines the card resource information of a node.
 type NodeCardResourceInfo struct {
-	CardInfo               CardInfo
-	CardResource           corev1.ResourceList
+	// card basic info in node labels, created by gpu operator or manually.
+	CardInfo CardInfo
+	// actual card resources in node status.capacity, created by device plugin.
+	CardResource corev1.ResourceList
+	// mapping from card name to resource name, for quick indexing in scheduler logic.
 	CardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 }
 
 var (
+	// nodeCardProductLabelRegex is used to extract card product information from node labels.
+	// car product label is necessary to get card name, count and memory.
 	nodeCardProductLabelRegex = regexp.MustCompile(`^((.+?)/(\w+))\.product$`)
 )
 
+// buildTotalResource builds the total resource of the cluster by listing all nodes from informer.
+// Note that, DO NOT use ssn.Nodes where, because ssn.Nodes are synced in node event handlers asynchronously,
+// which might lost some nodes in scheduling starting to work.
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 	p.nodeLister = ssn.InformerFactory().Core().V1().Nodes().Lister()
 	nodes, err := p.nodeLister.List(labels.Everything())
@@ -69,6 +77,7 @@ func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 	return true
 }
 
+// buildTotalResourceFromNodes builds the total resource of the cluster from the given nodes.
 func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
 	var (
 		totalNormalResource = make(corev1.ResourceList) // CPU, Memory, EphemeralStorage, etc.
@@ -145,6 +154,7 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 	return nodeCardInfo
 }
 
+// getCardInfoFromNode gets the card basic information from the node labels.
 func (p *Plugin) getCardInfoFromNode(node *corev1.Node) CardInfo {
 	for k, v := range node.Labels {
 		if strings.Contains(k, MigLabelAndResourceNamePrefix) {
@@ -191,6 +201,7 @@ func isMigResourceName(resourceName corev1.ResourceName) bool {
 	return strings.HasPrefix(string(resourceName), MigLabelAndResourceNamePrefix)
 }
 
+// addResourceList adds the resources in 'add' to 'total'.
 func addResourceList(total corev1.ResourceList, add corev1.ResourceList) {
 	for resourceName, quantity := range add {
 		if val, ok := total[resourceName]; ok {

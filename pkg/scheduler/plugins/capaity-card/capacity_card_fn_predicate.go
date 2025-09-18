@@ -32,6 +32,8 @@ import (
 )
 
 // PredicateFn checks if a task can be scheduled on the node.
+// This extension point is called before a task is scheduled on a node.
+// Customized logic here is especially for multi-cards task scheduling check.
 func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.NodeInfo) error {
 	taskCardName := p.getCardNameFromTask(ti)
 	if taskCardName == "" {
@@ -51,7 +53,7 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 		availableCardNames = make([]string, 0)
 	)
 
-	// filter card names by node.
+	// filter card names by node: is current node has the requesting card resource.
 	nodeCardInfo := p.getCardResourceFromNode(ni.Node)
 	for _, cardName := range taskMultiCardNames {
 		if _, ok := nodeCardInfo.CardNameToResourceName[corev1.ResourceName(cardName)]; ok {
@@ -65,13 +67,17 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 		)
 	}
 
-	// queue quota check for the card name.
+	// queue quota check for the card name,
+	// as queue quota is dynamically changed when other jobs in the same queue are both being scheduled
+	// in current session.
+
 	var (
 		logMsg           = ""
 		taskReqCardCount = ti.Resreq.ScalarResources[corev1.ResourceName(taskCardName)]
 	)
 	if taskReqCardCount == 0 {
-		// when bound to node, the multi-card name task resource name will be changed to the real card name.
+		// when bound to node, the multi-card name task resource name might be changed to the real card name,
+		// it so here does some fallback check.
 		for _, cardName := range taskMultiCardNames {
 			if count, ok := ti.Resreq.ScalarResources[corev1.ResourceName(cardName)]; ok && count > 0 {
 				taskReqCardCount = count
@@ -86,6 +92,7 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 				taskReqCardCount
 		)
 		if cardQuotaInQueue >= toBeUsedCardCount {
+			// allow the task to be scheduled on the node, at least one card quota is enough.
 			return nil
 		}
 		if logMsg != "" {

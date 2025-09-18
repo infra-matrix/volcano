@@ -50,104 +50,31 @@ type queueAttr struct {
 
 // buildQueueAttrs builds the attributes for all queues in the session.
 func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
+	// initialize totalGuarantee from all queues.
 	for _, queue := range ssn.Queues {
 		guarantee := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
 		p.totalGuarantee.Add(guarantee)
 	}
 
-	// Build attributes for Queues.
+	// build attributes for Queues.
 	for _, apiJob := range ssn.Jobs {
-		job, err := p.NewJobInfo(apiJob)
-		if err != nil {
-			klog.Errorf(
-				"Failed to create jobInfo for job <%s/%s>: %+v",
-				apiJob.Namespace, apiJob.Name, err,
-			)
-			continue
-		}
-		klog.V(4).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
-		if _, found := p.queueOpts[job.Queue]; !found {
-			queue := ssn.Queues[job.Queue]
-			qAttr := &queueAttr{
-				queueID:    queue.UID,
-				name:       queue.Name,
-				deserved:   p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved),
-				capability: p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability),
-				guarantee:  p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource),
-				allocated:  api.EmptyResource(),
-				request:    api.EmptyResource(),
-				elastic:    api.EmptyResource(),
-				inqueue:    api.EmptyResource(),
-			}
-			realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(qAttr.guarantee)
-			qAttr.realCapability = realCapability
-			if qAttr.capability.MilliCPU <= 0 {
-				qAttr.capability.MilliCPU = realCapability.MilliCPU
-			}
-			if qAttr.capability.Memory <= 0 {
-				qAttr.capability.Memory = realCapability.Memory
-			}
-			if !QueueHasCardQuota(queue.Queue) {
-				qAttr.capability.ScalarResources = realCapability.ScalarResources
-			}
-			p.queueOpts[job.Queue] = qAttr
-			klog.V(5).Infof("Added Queue <%s> attributes.", job.Queue)
-		}
-
-		qAttr := p.queueOpts[job.Queue]
-		for status, tasks := range job.TaskStatusIndex {
-			if api.AllocatedStatus(status) {
-				for _, t := range tasks {
-					qAttr.allocated.Add(t.Resreq)
-					qAttr.request.Add(t.Resreq)
-				}
-			} else if status == api.Pending {
-				for _, t := range tasks {
-					qAttr.request.Add(t.Resreq)
-				}
-			}
-		}
-
-		if job.PodGroup.Status.Phase == scheduling.PodGroupInqueue {
-			// deduct the resources of scheduling gated tasks in a job when calculating inqueued resources
-			// so that it will not block other jobs from being inqueued.
-			qAttr.inqueue.Add(job.DeductSchGatedResources(job.GetMinResources()))
-		}
-
-		// calculate inqueue resource for running jobs
-		// the judgement 'job.PodGroup.Status.Running >= job.PodGroup.Spec.MinMember'
-		// will work on cases such as the following condition:
-		// Considering a Spark job is completed(driver pod is completed) while the PodGroup keeps running,
-		// the allocated resource will be reserved again if without the judgement.
-		if job.PodGroup.Status.Phase == scheduling.PodGroupRunning &&
-			job.PodGroup.Spec.MinResources != nil &&
-			int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
-			inqueued := util.GetInqueueResource(job.JobInfo, job.Allocated)
-			qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
-		}
-		qAttr.elastic.Add(job.GetElasticResources())
-		klog.V(5).Infof(
-			"Queue %s allocated <%s> request <%s> inqueue <%s> elastic <%s>",
-			qAttr.name,
-			qAttr.allocated.String(),
-			qAttr.request.String(),
-			qAttr.inqueue.String(),
-			qAttr.elastic.String(),
-		)
+		p.buildQueueAttrByJob(ssn, apiJob)
 	}
 
-	for _, attr := range p.queueOpts {
-		if attr.realCapability != nil {
-			attr.deserved.MinDimensionResource(attr.realCapability, api.Infinity)
+	// update queue deserved and print queue info.
+	for _, qAttr := range p.queueOpts {
+		if qAttr.realCapability != nil {
+			qAttr.deserved.MinDimensionResource(qAttr.realCapability, api.Infinity)
 		}
-		attr.deserved = helpers.Max(attr.deserved, attr.guarantee)
-		p.updateShare(attr)
+		qAttr.deserved = helpers.Max(qAttr.deserved, qAttr.guarantee)
+		p.updateShare(qAttr)
 		klog.V(4).Infof(
-			"The attributes of queue <%s> in capacity: deserved <%v>, realCapability <%v>, allocate <%v>, request <%v>, elastic <%v>, share <%0.2f>",
-			attr.name, attr.deserved, attr.realCapability, attr.allocated, attr.request, attr.elastic, attr.share,
+			"The attributes of queue <%s>: capacity: <%v>, realCapability <%v>, allocate <%v>, request <%v>",
+			qAttr.name, qAttr.capability, qAttr.realCapability, qAttr.allocated, qAttr.request,
 		)
 	}
 
+	// add the queue comparison function according to the queue's priority and share.
 	ssn.AddQueueOrderFn(p.Name(), func(l, r interface{}) int {
 		lv := l.(*api.QueueInfo)
 		rv := r.(*api.QueueInfo)
@@ -164,6 +91,99 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 		return 1
 	})
 	return true
+}
+
+// buildQueueAttrByJob builds/updates the attributes of a queue by a job.
+func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo) {
+	job, err := p.NewJobInfo(apiJob)
+	if err != nil {
+		klog.Errorf(
+			"Failed to create jobInfo for job <%s/%s>: %+v",
+			apiJob.Namespace, apiJob.Name, err,
+		)
+		return
+	}
+	klog.V(5).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
+	if _, found := p.queueOpts[job.Queue]; !found {
+		queue := ssn.Queues[job.Queue]
+		qAttr := p.newQueueAttr(queue)
+		p.queueOpts[job.Queue] = qAttr
+		klog.V(5).Infof("Created Queue attr for queue <%s>.", queue.Name)
+	}
+
+	// calculate allocated and request resource for running and pending tasks in a job to queue.
+	qAttr := p.queueOpts[job.Queue]
+	for status, tasks := range job.TaskStatusIndex {
+		if api.AllocatedStatus(status) {
+			for _, t := range tasks {
+				qAttr.allocated.Add(t.Resreq)
+				qAttr.request.Add(t.Resreq)
+			}
+		} else if status == api.Pending {
+			for _, t := range tasks {
+				qAttr.request.Add(t.Resreq)
+			}
+		}
+	}
+
+	// calculate inqueue resource for pending jobs to queue.
+	if job.PodGroup.Status.Phase == scheduling.PodGroupInqueue {
+		// deduct the resources of scheduling gated tasks in a job when calculating inqueued resources
+		// so that it will not block other jobs from being inqueued.
+		qAttr.inqueue.Add(job.DeductSchGatedResources(job.GetMinResources()))
+	}
+
+	// calculate inqueue resource for running jobs
+	// the judgement 'job.PodGroup.Status.Running >= job.PodGroup.Spec.MinMember'
+	// will work on cases such as the following condition:
+	// Considering a Spark job is completed(driver pod is completed) while the PodGroup keeps running,
+	// the allocated resource will be reserved again if without the judgement.
+	if job.PodGroup.Status.Phase == scheduling.PodGroupRunning &&
+		job.PodGroup.Spec.MinResources != nil &&
+		int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
+		inqueued := util.GetInqueueResource(job.JobInfo, job.Allocated)
+		qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
+	}
+	qAttr.elastic.Add(job.GetElasticResources())
+	klog.V(5).Infof(
+		"Built queue <%s> with job <%s/%s>: allocated <%s>, request <%s>, inqueue <%s>",
+		qAttr.name, job.Namespace, job.Name,
+		qAttr.allocated.String(),
+		qAttr.request.String(),
+		qAttr.inqueue.String(),
+	)
+}
+
+// newQueueAttr creates a new queueAttr from a QueueInfo object.
+func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
+	var (
+		deserved   = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved)
+		capability = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
+		guarantee  = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
+	)
+	qAttr := &queueAttr{
+		queueID:    queue.UID,
+		name:       queue.Name,
+		deserved:   deserved,
+		capability: capability,
+		guarantee:  guarantee,
+		allocated:  api.EmptyResource(),
+		request:    api.EmptyResource(),
+		elastic:    api.EmptyResource(),
+		inqueue:    api.EmptyResource(),
+	}
+	realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(qAttr.guarantee)
+	qAttr.realCapability = realCapability
+	if qAttr.capability.MilliCPU <= 0 {
+		qAttr.capability.MilliCPU = realCapability.MilliCPU
+	}
+	if qAttr.capability.Memory <= 0 {
+		qAttr.capability.Memory = realCapability.Memory
+	}
+	if !QueueHasCardQuota(queue.Queue) {
+		qAttr.capability.ScalarResources = realCapability.ScalarResources
+	}
+	return qAttr
 }
 
 // newQueueResourceSupportingCard creates a new resource object from resource list
@@ -183,6 +203,7 @@ func (p *Plugin) newQueueResourceSupportingCard(q *scheduling.Queue, rl v1.Resou
 	return queueResource
 }
 
+// buildQueueMetrics builds the metrics for all queues in the session.
 func (p *Plugin) buildQueueMetrics(ssn *framework.Session) {
 	for queueID, queueInfo := range ssn.Queues {
 		queue := ssn.Queues[queueID]
