@@ -78,9 +78,9 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 // isJobEnqueueable checks whether the job can be enqueued in the queue according to the queue's real capability.
 func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 	var (
-		jobReqResource   = job.GetMinResources()
-		queueCapability  = qAttr.capability
-		toBeUsedResource = jobReqResource.Clone().
+		jobReqResource  = job.GetMinResources()
+		queueCapability = qAttr.capability
+		totalToBeUsed   = jobReqResource.Clone().
 			Add(qAttr.allocated).
 			Add(qAttr.inqueue).
 			Sub(qAttr.elastic)
@@ -95,7 +95,7 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 	)
 
 	if jobReqResource == nil {
-		if ok := toBeUsedResource.LessEqual(queueCapability, api.Zero); !ok {
+		if ok := totalToBeUsed.LessEqual(queueCapability, api.Zero); !ok {
 			klog.V(5).Infof(
 				"Job <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
 				job.Namespace, job.Name, qAttr.name, queueCapability.String(),
@@ -109,7 +109,7 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 		return true
 	}
 
-	if toBeUsedResource == nil {
+	if totalToBeUsed == nil {
 		klog.V(5).Infof(
 			"Job <%s/%s>, Queue <%s> totalToBeUsed is nil, allow it to enqueue",
 			job.Namespace, job.Name, qAttr.name,
@@ -117,25 +117,25 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 		return true
 	}
 
-	if jobReqResource.MilliCPU > 0 && toBeUsedResource.MilliCPU > queueCapability.MilliCPU {
+	if jobReqResource.MilliCPU > 0 && totalToBeUsed.MilliCPU > queueCapability.MilliCPU {
 		klog.V(5).Infof(
 			"Job <%s/%s>, Queue <%s> has no enough CPU, request <%v>, totalToBeUsed <%v>, capability <%v>",
 			job.Namespace, job.Name, qAttr.name,
-			jobReqResource.MilliCPU, toBeUsedResource.MilliCPU, queueCapability.MilliCPU,
+			jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
 		)
 		return false
 	}
-	if jobReqResource.Memory > 0 && toBeUsedResource.Memory > queueCapability.Memory {
+	if jobReqResource.Memory > 0 && totalToBeUsed.Memory > queueCapability.Memory {
 		klog.V(5).Infof(
 			"Job <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, totalToBeUsed <%v Mi>, capability <%v Mi>",
 			job.Namespace, job.Name, qAttr.name,
-			jobReqResource.Memory/1024/1024, toBeUsedResource.Memory/1024/1024, queueCapability.Memory/1024/1024,
+			jobReqResource.Memory/1024/1024, totalToBeUsed.Memory/1024/1024, queueCapability.Memory/1024/1024,
 		)
 		return false
 	}
 
 	// if r.scalar is nil, whatever rr.scalar is, r is less or equal to rr
-	if toBeUsedResource.ScalarResources == nil {
+	if totalToBeUsed.ScalarResources == nil {
 		return true
 	}
 
@@ -144,7 +144,7 @@ func (p *Plugin) isJobEnqueueable(qAttr *queueAttr, job *JobInfo) bool {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, toBeUsedResource, queueCapability,
+			scalarName, scalarQuant, totalToBeUsed, queueCapability,
 		)
 		if checkResult.Ok {
 			continue
