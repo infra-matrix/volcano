@@ -197,6 +197,8 @@ func (p *Plugin) newQueueResourceSupportingCard(q *scheduling.Queue, rl v1.Resou
 	}
 	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
 		queueResource.ScalarResources[cardName] = cardCountMilli
+		// convert card name to real resource name, and add the card count to the resource.
+		// for example, convert "NVIDIA-H200" to "nvidia.com/gpu"
 		cardResourceName := p.cardNameToResourceName[cardName]
 		if cardResourceName == "" {
 			klog.Warningf("No resource name found for card <%s> in queue <%s>", cardName, q.Name)
