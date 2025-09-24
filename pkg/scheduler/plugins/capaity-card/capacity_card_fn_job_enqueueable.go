@@ -103,6 +103,13 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 				"Job <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
 				job.Namespace, job.Name, qAttr.name, queueCapability.String(),
 			)
+			ssn.RecordPodGroupEvent(
+				job.PodGroup, v1.EventTypeWarning, "EmptyQueueCapability",
+				fmt.Sprintf(
+					"Queue <%s> capability <%s> is empty, deny it to enqueue",
+					qAttr.name, queueCapability.String(),
+				),
+			)
 			return false
 		}
 		klog.V(5).Infof(
@@ -180,7 +187,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 			checkResult.QueueCapabilityQuant,
 		)
 		ssn.RecordPodGroupEvent(
-			job.PodGroup, v1.EventTypeWarning, "InsufficientResourceQuota",
+			job.PodGroup, v1.EventTypeWarning, "InsufficientScalarQuota",
 			fmt.Sprintf(
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name, checkResult.NoEnoughScalarName, checkResult.NoEnoughScalarCount,

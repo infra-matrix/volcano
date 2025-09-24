@@ -63,6 +63,13 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to allocate",
 				ti.Namespace, ti.Name, qAttr.name, queueCapability.String(),
 			)
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, "EmptyQueueCapability",
+					"Queue <%s> capability <%s> is empty, deny it to allocate",
+					qAttr.name, queueCapability.String(),
+				)
+			}
 			return false
 		}
 		klog.V(5).Infof(
@@ -136,7 +143,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		)
 		if ti.Pod != nil {
 			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, "InsufficientResourceQuota",
+				ti.Pod, v1.EventTypeWarning, "InsufficientScalarQuota",
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name,
 				checkResult.NoEnoughScalarName,
