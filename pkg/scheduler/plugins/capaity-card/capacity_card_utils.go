@@ -64,18 +64,18 @@ func GetCardResourceFromAnnotations(annotations map[string]string, key string) *
 
 // CheckSingleScalarResourceResult is the result of CheckSingleScalarResource.
 type CheckSingleScalarResourceResult struct {
-	Ok                  bool
-	NoEnoughScalarName  v1.ResourceName
-	NoEnoughScalarCount float64
-	ToBeUsedScalarQuant float64
-	RealCapabilityQuant float64
+	Ok                   bool
+	NoEnoughScalarName   v1.ResourceName
+	NoEnoughScalarCount  float64
+	ToBeUsedScalarQuant  float64
+	QueueCapabilityQuant float64
 }
 
 // CheckSingleScalarResource checks whether the scalar resource is enough.
 func CheckSingleScalarResource(
 	scalarName v1.ResourceName,
 	scalarQuant float64,
-	toBeUsedResource, realCapability *api.Resource,
+	toBeUsedResource, queueCapability *api.Resource,
 ) CheckSingleScalarResourceResult {
 	result := CheckSingleScalarResourceResult{
 		Ok: true,
@@ -89,7 +89,7 @@ func CheckSingleScalarResource(
 		multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
 		for _, cardName := range multiCardNames {
 			if result = CheckSingleScalarResource(
-				v1.ResourceName(cardName), scalarQuant, toBeUsedResource, realCapability,
+				v1.ResourceName(cardName), scalarQuant, toBeUsedResource, queueCapability,
 			); result.Ok {
 				return result
 			}
@@ -101,8 +101,8 @@ func CheckSingleScalarResource(
 	}
 
 	result.ToBeUsedScalarQuant = toBeUsedResource.ScalarResources[scalarName]
-	result.RealCapabilityQuant = realCapability.ScalarResources[scalarName]
-	if scalarQuant > 0 && result.ToBeUsedScalarQuant > result.RealCapabilityQuant {
+	result.QueueCapabilityQuant = queueCapability.ScalarResources[scalarName]
+	if scalarQuant > 0 && result.ToBeUsedScalarQuant > result.QueueCapabilityQuant {
 		result.Ok = false
 		result.NoEnoughScalarName = scalarName
 		result.NoEnoughScalarCount = scalarQuant

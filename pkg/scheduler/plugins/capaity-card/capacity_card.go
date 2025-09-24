@@ -24,9 +24,13 @@ package capacitycard
 
 import (
 	`fmt`
+	`sync`
 
 	corev1 `k8s.io/api/core/v1`
+	"k8s.io/client-go/kubernetes/scheme"
+	typecorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	v1 `k8s.io/client-go/listers/core/v1`
+	"k8s.io/client-go/tools/record"
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
 	"volcano.sh/volcano/pkg/scheduler/framework"
@@ -82,6 +86,11 @@ type Plugin struct {
 	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
 }
 
+var (
+	eventRecorder     record.EventRecorder
+	eventRecorderOnce sync.Once
+)
+
 // New return capacity plugin.
 func New(_ framework.Arguments) framework.Plugin {
 	return &Plugin{
@@ -100,6 +109,7 @@ func (p *Plugin) Name() string {
 
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
+	p.buildEventRecorder(ssn)
 	readyToSchedule := p.buildTotalResource(ssn)
 	if readyToSchedule {
 		readyToSchedule = p.buildQueueAttrs(ssn)
@@ -156,6 +166,20 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		DeallocateFunc: func(event *framework.Event) {
 			p.OnDeallocate(ssn, event)
 		},
+	})
+}
+
+// buildEventRecorder builds the event recorder for plugin.
+func (p *Plugin) buildEventRecorder(ssn *framework.Session) {
+	eventRecorderOnce.Do(func() {
+		eventBroadcaster := record.NewBroadcaster()
+		eventBroadcaster.StartStructuredLogging(0)
+		eventBroadcaster.StartRecordingToSink(&typecorev1.EventSinkImpl{
+			Interface: ssn.KubeClient().CoreV1().Events(""),
+		})
+		eventRecorder = eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{
+			Component: fmt.Sprintf(`volcano.%s`, p.Name()),
+		})
 	})
 }
 
