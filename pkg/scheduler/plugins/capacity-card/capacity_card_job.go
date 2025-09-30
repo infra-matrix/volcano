@@ -23,12 +23,12 @@ limitations under the License.
 package capacitycard
 
 import (
-	`fmt`
-	`strings`
+	"fmt"
+	"strings"
 
-	v1 `k8s.io/api/core/v1`
+	v1 "k8s.io/api/core/v1"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
-	`volcano.sh/volcano/pkg/scheduler/api`
+	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // JobInfo describes the job used in capacity plugin.
@@ -41,47 +41,33 @@ type JobInfo struct {
 	preCheckCardResource *api.Resource
 }
 
-// NewJobInfo creates a JobInfo instance.
-func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
-	// read card request from Job(PodGroup).
-	preCheckCardResource := GetCardResourceFromAnnotations(
-		job.PodGroup.Annotations,
-		JobAnnotationKeyCardRequest,
-	)
+// UpdateCardResourcesForJob creates a JobInfo instance.
+func (p *Plugin) UpdateCardResourcesForJob(job *api.JobInfo) (*api.JobInfo, error) {
 	// reset job allocated resource, will recalculate it below
 	job.Allocated = api.EmptyResource()
 	// read task card request from task annotations.
-	realCardRequest := api.EmptyResource()
-	for taskId, ti := range job.Tasks {
+	for _, ti := range job.Tasks {
 		if ti.Pod != nil {
 			taskCardResource, err := p.getCardResourceFromTask(ti)
 			if err != nil {
 				return nil, err
 			}
-			realCardRequest.Add(taskCardResource)
 			// re-calculate the card request for task.
 			// this task info resource assignment will update the queue.Status.Allocated after session close.
 			for scalarName, scalarCount := range taskCardResource.ScalarResources {
 				// Note: this scalar setting will update the queue.Status.Allocated after session close.
 				ti.Resreq.SetScalar(scalarName, scalarCount)
+				ti.InitResreq.SetScalar(scalarName, scalarCount)
 			}
-			job.Tasks[taskId] = ti
+
+			job.TotalRequest.Add(taskCardResource)
+			if api.AllocatedStatus(ti.Status) {
+				job.Allocated.Add(taskCardResource)
+			}
 		}
-		if api.AllocatedStatus(ti.Status) {
-			job.Allocated.Add(ti.Resreq)
-		}
-	}
-	if realCardRequest.IsEmpty() {
-		job.TotalRequest.Add(preCheckCardResource)
-	} else {
-		preCheckCardResource = realCardRequest
-		job.TotalRequest.Add(realCardRequest)
 	}
 
-	return &JobInfo{
-		JobInfo:              job,
-		preCheckCardResource: preCheckCardResource,
-	}, nil
+	return job, nil
 }
 
 // GetMinResources return the min resources of PodGroup.

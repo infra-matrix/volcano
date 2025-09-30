@@ -23,13 +23,13 @@ limitations under the License.
 package capacitycard
 
 import (
-	`encoding/json`
-	`strings`
+	"encoding/json"
+	"strings"
 
-	v1 `k8s.io/api/core/v1`
-	`k8s.io/klog/v2`
-	`volcano.sh/apis/pkg/apis/scheduling`
-	`volcano.sh/volcano/pkg/scheduler/api`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"volcano.sh/apis/pkg/apis/scheduling"
+	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // QueueHasCardQuota checks whether the queue has card quota annotation.
@@ -39,8 +39,8 @@ func QueueHasCardQuota(q *scheduling.Queue) bool {
 }
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.
-func GetCardResourceFromAnnotations(annotations map[string]string, key string) *api.Resource {
-	cardResource := api.EmptyResource()
+func GetCardResourceFromAnnotations(annotations map[string]string, key string) map[v1.ResourceName]float64 {
+	cardResource := map[v1.ResourceName]float64{}
 	if cardJson, ok := annotations[key]; ok {
 		cardMap := make(map[string]int)
 		if err := json.Unmarshal([]byte(cardJson), &cardMap); err != nil {
@@ -50,11 +50,9 @@ func GetCardResourceFromAnnotations(annotations map[string]string, key string) *
 			)
 			return cardResource
 		}
-		if cardResource.ScalarResources == nil {
-			cardResource.ScalarResources = make(map[v1.ResourceName]float64)
-		}
+
 		for cardName, cardCount := range cardMap {
-			cardResource.ScalarResources[v1.ResourceName(cardName)] = float64(
+			cardResource[v1.ResourceName(cardName)] = float64(
 				cardCount * cardCountQuantityMultiplier,
 			)
 		}
@@ -85,23 +83,12 @@ func CheckSingleScalarResource(
 	// in which the card name is extracted from node's label.
 	//
 	// In multi-cards name, any one of the card can satisfy the request is ok.
-	if strings.Contains(scalarName.String(), MultiCardSeparator) {
-		multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
-		for _, cardName := range multiCardNames {
-			if result = CheckSingleScalarResource(
-				v1.ResourceName(cardName), scalarQuant, toBeUsedResource, queueCapability,
-			); result.Ok {
-				return result
-			}
-		}
-		result.Ok = false
-		result.NoEnoughScalarName = v1.ResourceName(multiCardNames[0])
-		result.NoEnoughScalarCount = scalarQuant
-		return result
+	multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
+	for _, cardName := range multiCardNames {
+		result.ToBeUsedScalarQuant += toBeUsedResource.ScalarResources[v1.ResourceName(cardName)]
+		result.QueueCapabilityQuant += queueCapability.ScalarResources[v1.ResourceName(cardName)]
 	}
 
-	result.ToBeUsedScalarQuant = toBeUsedResource.ScalarResources[scalarName]
-	result.QueueCapabilityQuant = queueCapability.ScalarResources[scalarName]
 	if scalarQuant > 0 && result.ToBeUsedScalarQuant > result.QueueCapabilityQuant {
 		result.Ok = false
 		result.NoEnoughScalarName = scalarName

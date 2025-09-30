@@ -26,11 +26,11 @@ import (
 	"fmt"
 
 	v1 "k8s.io/api/core/v1"
-	`k8s.io/klog/v2`
-	`volcano.sh/apis/pkg/apis/scheduling`
-	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/framework`
-	`volcano.sh/volcano/pkg/scheduler/plugins/util`
+	"k8s.io/klog/v2"
+	"volcano.sh/apis/pkg/apis/scheduling"
+	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/plugins/util"
 )
 
 // JobEnqueueableFn checks whether the job can be enqueued, which does the queue-level capacity pre-check.
@@ -38,16 +38,7 @@ import (
 // If it returns util.Permit, which will do the following aspects to resources:
 // 1. PogGroup phase will be changed from Pending to InQueue.
 // 2. Pod will be created and in phase of Pending.
-func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) int {
-	job, err := p.NewJobInfo(jobInfo)
-	if err != nil {
-		klog.Errorf(
-			"Failed to create jobInfo for job <%s/%s>: %+v",
-			jobInfo.Namespace, jobInfo.Name, err,
-		)
-		return util.Reject
-	}
-
+func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, job *api.JobInfo) int {
 	var (
 		queueID = job.Queue
 		queue   = ssn.Queues[queueID]
@@ -63,11 +54,12 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 	}
 
 	// it checks whether the queue has enough resource to run the job.
-	if !p.isJobEnqueueable(ssn, qAttr, job) {
+	if !p.jobEnqueueable(ssn, queue, job) {
 		klog.V(2).Infof(
 			"Queue <%s> has no enough resource for job <%s/%s>",
 			queue.Name, job.Namespace, job.Name,
 		)
+		ssn.RecordPodGroupEvent(job.PodGroup, v1.EventTypeNormal, string(scheduling.PodGroupUnschedulableType), "queue resource quota insufficient")
 		return util.Reject
 	}
 
@@ -79,87 +71,21 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 }
 
 // isJobEnqueueable checks whether the job can be enqueued in the queue according to the queue's real capability.
-func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job *JobInfo) bool {
-	var (
-		jobReqResource  = job.GetMinResources()
-		queueCapability = qAttr.capability
-		totalToBeUsed   = jobReqResource.Clone().
-			Add(qAttr.allocated).
-			Add(qAttr.inqueue).
-			Sub(qAttr.elastic)
-	)
-	klog.V(5).Infof(
-		"Job <%s/%s> min resource <%s>, queue %s capability <%s> allocated <%s> inqueue <%s> elastic <%s>",
-		job.Namespace, job.Name, jobReqResource.String(), qAttr.name,
-		queueCapability.String(),
-		qAttr.allocated.String(),
-		qAttr.inqueue.String(),
-		qAttr.elastic.String(),
-	)
+func (p *Plugin) jobEnqueueable(ssn *framework.Session, queue *api.QueueInfo, job *api.JobInfo) bool {
+	attr := p.queueOpts[queue.UID]
+	minReq := job.GetMinResources()
 
-	if jobReqResource == nil {
-		if ok := totalToBeUsed.LessEqual(queueCapability, api.Zero); !ok {
-			klog.V(5).Infof(
-				"Job <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
-				job.Namespace, job.Name, qAttr.name, queueCapability.String(),
-			)
-			ssn.RecordPodGroupEvent(
-				job.PodGroup, v1.EventTypeWarning, "EmptyQueueCapability",
-				fmt.Sprintf(
-					"Queue <%s> capability <%s> is empty, deny it to enqueue",
-					qAttr.name, queueCapability.String(),
-				),
-			)
-			return false
-		}
-		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> request is nil, allow it to enqueue",
-			job.Namespace, job.Name, qAttr.name,
-		)
-		return true
-	}
+	klog.V(5).Infof("job %s min resource <%s>, queue %s capability <%s> allocated <%s> inqueue <%s> elastic <%s>",
+		job.Name, minReq.String(), queue.Name, attr.realCapability.String(), attr.allocated.String(), attr.inqueue.String(), attr.elastic.String())
+	// The queue resource quota limit has not reached
+	totalToBeUsed := minReq.Clone().Add(attr.allocated).Add(attr.inqueue).Sub(attr.elastic)
 
-	if totalToBeUsed == nil {
-		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> totalToBeUsed is nil, allow it to enqueue",
-			job.Namespace, job.Name, qAttr.name,
-		)
-		return true
+	// check cpu and memory
+	cpuMemoryReq := &api.Resource{
+		MilliCPU: minReq.MilliCPU,
+		Memory:   minReq.Memory,
 	}
-
-	if jobReqResource.MilliCPU > 0 && totalToBeUsed.MilliCPU > queueCapability.MilliCPU {
-		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
-			job.Namespace, job.Name, qAttr.name,
-			jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
-		)
-		ssn.RecordPodGroupEvent(
-			job.PodGroup, v1.EventTypeWarning, "InsufficientCPUQuota",
-			fmt.Sprintf(
-				"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
-				qAttr.name, jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
-			),
-		)
-		return false
-	}
-	if jobReqResource.Memory > 0 && totalToBeUsed.Memory > queueCapability.Memory {
-		var (
-			jobReqResourceMi  = jobReqResource.Memory / 1024 / 1024
-			totalToBeUsedMi   = totalToBeUsed.Memory / 1024 / 1024
-			queueCapabilityMi = queueCapability.Memory / 1024 / 1024
-		)
-		klog.V(5).Infof(
-			"Job <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
-			job.Namespace, job.Name, qAttr.name,
-			jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
-		)
-		ssn.RecordPodGroupEvent(
-			job.PodGroup, v1.EventTypeWarning, "InsufficientMemoryQuota",
-			fmt.Sprintf(
-				"Queue %s has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
-				qAttr.name, jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
-			),
-		)
+	if !totalToBeUsed.LessEqualWithDimension(attr.realCapability, cpuMemoryReq) {
 		return false
 	}
 
@@ -168,19 +94,19 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 		return true
 	}
 
-	for scalarName, scalarQuant := range jobReqResource.ScalarResources {
+	for scalarName, scalarQuant := range minReq.ScalarResources {
 		if api.IsIgnoredScalarResource(scalarName) {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeUsed, queueCapability,
+			scalarName, scalarQuant, totalToBeUsed, attr.realCapability,
 		)
 		if checkResult.Ok {
 			continue
 		}
 		klog.V(2).Infof(
 			"Job <%s/%s>, Queue <%s> has no enough %s, request <%v>, total would be <%v>, capability <%v>",
-			job.Namespace, job.Name, qAttr.name,
+			job.Namespace, job.Name, queue.Name,
 			checkResult.NoEnoughScalarName,
 			checkResult.NoEnoughScalarCount,
 			checkResult.ToBeUsedScalarQuant,
@@ -190,7 +116,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 			job.PodGroup, v1.EventTypeWarning, "InsufficientScalarQuota",
 			fmt.Sprintf(
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
-				qAttr.name, checkResult.NoEnoughScalarName, checkResult.NoEnoughScalarCount,
+				queue.Name, checkResult.NoEnoughScalarName, checkResult.NoEnoughScalarCount,
 				checkResult.ToBeUsedScalarQuant, checkResult.QueueCapabilityQuant,
 			),
 		)
