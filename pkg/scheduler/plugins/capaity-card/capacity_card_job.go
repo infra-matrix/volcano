@@ -41,33 +41,47 @@ type JobInfo struct {
 	preCheckCardResource *api.Resource
 }
 
-// UpdateCardResourcesForJob creates a JobInfo instance.
-func (p *Plugin) UpdateCardResourcesForJob(job *api.JobInfo) (*api.JobInfo, error) {
+// NewJobInfo creates a JobInfo instance.
+func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
+	// read card request from Job(PodGroup).
+	preCheckCardResource := GetCardResourceFromAnnotations(
+		job.PodGroup.Annotations,
+		JobAnnotationKeyCardRequest,
+	)
 	// reset job allocated resource, will recalculate it below
 	job.Allocated = api.EmptyResource()
 	// read task card request from task annotations.
-	for _, ti := range job.Tasks {
+	realCardRequest := api.EmptyResource()
+	for taskId, ti := range job.Tasks {
 		if ti.Pod != nil {
 			taskCardResource, err := p.getCardResourceFromTask(ti)
 			if err != nil {
 				return nil, err
 			}
+			realCardRequest.Add(taskCardResource)
 			// re-calculate the card request for task.
 			// this task info resource assignment will update the queue.Status.Allocated after session close.
 			for scalarName, scalarCount := range taskCardResource.ScalarResources {
 				// Note: this scalar setting will update the queue.Status.Allocated after session close.
 				ti.Resreq.SetScalar(scalarName, scalarCount)
-				ti.InitResreq.SetScalar(scalarName, scalarCount)
 			}
-
-			job.TotalRequest.Add(taskCardResource)
-			if api.AllocatedStatus(ti.Status) {
-				job.Allocated.Add(taskCardResource)
-			}
+			job.Tasks[taskId] = ti
+		}
+		if api.AllocatedStatus(ti.Status) {
+			job.Allocated.Add(ti.Resreq)
 		}
 	}
+	if realCardRequest.IsEmpty() {
+		job.TotalRequest.Add(preCheckCardResource)
+	} else {
+		preCheckCardResource = realCardRequest
+		job.TotalRequest.Add(realCardRequest)
+	}
 
-	return job, nil
+	return &JobInfo{
+		JobInfo:              job,
+		preCheckCardResource: preCheckCardResource,
+	}, nil
 }
 
 // GetMinResources return the min resources of PodGroup.

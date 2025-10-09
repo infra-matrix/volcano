@@ -31,7 +31,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
+	"volcano.sh/volcano/pkg/scheduler/api"
 	"volcano.sh/volcano/pkg/scheduler/framework"
 )
 
@@ -63,27 +65,36 @@ var (
 // buildTotalResource builds the total resource of the cluster by listing all nodes from informer.
 // Note that, DO NOT use ssn.Nodes where, because ssn.Nodes are synced in node event handlers asynchronously,
 // which might lost some nodes in scheduling starting to work.
-func (p *Plugin) buildTotalResource(ssn *framework.Session) {
-	var nodes []*corev1.Node
-	for _, nodeInfo := range ssn.NodeList {
-		nodes = append(nodes, nodeInfo.Node)
+func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
+	p.nodeLister = ssn.InformerFactory().Core().V1().Nodes().Lister()
+	nodes, err := p.nodeLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("Failed to list nodes: %+v", err)
+		return false
 	}
-	p.totalNormalResource.Add(ssn.TotalResource)
 	p.buildTotalResourceFromNodes(nodes)
+	return true
 }
 
 // buildTotalResourceFromNodes builds the total resource of the cluster from the given nodes.
 func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node) {
-	p.totalResource.Add(p.totalNormalResource)
-
+	var (
+		totalNormalResource = make(corev1.ResourceList) // CPU, Memory, EphemeralStorage, etc.
+		totalCardResource   = make(corev1.ResourceList) // GPU/NPU/PPU cards, etc.
+	)
 	for _, node := range nodes {
+		addResourceList(
+			totalNormalResource, node.Status.Allocatable.DeepCopy(),
+		)
 		nodeCardInfo := p.getCardResourceFromNode(node)
-		for resName, quantity := range nodeCardInfo.CardResource {
-			p.totalResource.AddScalar(resName, float64(quantity.Value()*cardCountQuantityMultiplier))
-		}
+		addResourceList(totalCardResource, nodeCardInfo.CardResource)
 		for cardName, resourceName := range nodeCardInfo.CardNameToResourceName {
 			p.cardNameToResourceName[cardName] = resourceName
 		}
+	}
+	p.totalResource = api.NewResource(totalNormalResource)
+	for resName, quantity := range totalCardResource {
+		p.totalResource.AddScalar(resName, float64(quantity.Value()*cardCountQuantityMultiplier))
 	}
 }
 

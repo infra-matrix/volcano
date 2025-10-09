@@ -23,8 +23,6 @@ limitations under the License.
 package capacitycard
 
 import (
-	"math"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"volcano.sh/apis/pkg/apis/scheduling"
@@ -54,30 +52,13 @@ type queueAttr struct {
 func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 	// initialize totalGuarantee from all queues.
 	for _, queue := range ssn.Queues {
-		guarantee := api.EmptyResource()
-		if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
-			guarantee.Add(api.NewResource(queue.Queue.Spec.Guarantee.Resource))
-			p.totalNormalGuarantee.Add(api.NewResource(queue.Queue.Spec.Guarantee.Resource))
-		}
-
-		cardResource := p.getCardResourcesByQueue(queue.Queue)
-		setScalarResources(guarantee, cardResource)
+		guarantee := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
 		p.totalGuarantee.Add(guarantee)
 	}
 
 	// build attributes for Queues.
-	for _, job := range ssn.Jobs {
-		var err error
-		job, err = p.UpdateCardResourcesForJob(job)
-		if err != nil {
-			klog.Errorf(
-				"Failed to update card resources for job <%s/%s>: %+v",
-				job.Namespace, job.Name, err,
-			)
-			return
-		}
-
-		p.buildQueueAttrByJob(ssn, job)
+	for _, apiJob := range ssn.Jobs {
+		p.buildQueueAttrByJob(ssn, apiJob)
 	}
 
 	// update queue deserved and print queue info.
@@ -112,7 +93,15 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 }
 
 // buildQueueAttrByJob builds/updates the attributes of a queue by a job.
-func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, job *api.JobInfo) {
+func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo) {
+	job, err := p.NewJobInfo(apiJob)
+	if err != nil {
+		klog.Errorf(
+			"Failed to create jobInfo for job <%s/%s>: %+v",
+			apiJob.Namespace, apiJob.Name, err,
+		)
+		return
+	}
 	klog.V(5).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
 	if _, found := p.queueOpts[job.Queue]; !found {
 		queue := ssn.Queues[job.Queue]
@@ -150,8 +139,8 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, job *api.JobInfo) {
 	// the allocated resource will be reserved again if without the judgement.
 	if job.PodGroup.Status.Phase == scheduling.PodGroupRunning &&
 		job.PodGroup.Spec.MinResources != nil &&
-		int32(util.CalculateAllocatedTaskNum(job)) >= job.PodGroup.Spec.MinMember {
-		inqueued := util.GetInqueueResource(job, job.Allocated)
+		int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
+		inqueued := util.GetInqueueResource(job.JobInfo, job.Allocated)
 		qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
 	}
 	qAttr.elastic.Add(job.GetElasticResources())
@@ -166,60 +155,47 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, job *api.JobInfo) {
 
 // newQueueAttr creates a new queueAttr from a QueueInfo object.
 func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
-	// initialize deserved from queue.Queue.Spec.Deserved.
-	attr := &queueAttr{
-		queueID: queue.UID,
-		name:    queue.Name,
-
-		deserved:  api.NewResource(queue.Queue.Spec.Deserved),
-		allocated: api.EmptyResource(),
-		request:   api.EmptyResource(),
-		elastic:   api.EmptyResource(),
-		inqueue:   api.EmptyResource(),
-		guarantee: api.EmptyResource(),
+	var (
+		deserved   = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved)
+		capability = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
+		guarantee  = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
+	)
+	qAttr := &queueAttr{
+		queueID:    queue.UID,
+		name:       queue.Name,
+		deserved:   deserved,
+		capability: capability,
+		guarantee:  guarantee,
+		allocated:  api.EmptyResource(),
+		request:    api.EmptyResource(),
+		elastic:    api.EmptyResource(),
+		inqueue:    api.EmptyResource(),
 	}
-
-	// initialize capability from queue.Queue.Spec.Capability.
-	if len(queue.Queue.Spec.Capability) != 0 {
-		attr.capability = api.NewResource(queue.Queue.Spec.Capability)
-		if attr.capability.MilliCPU <= 0 {
-			attr.capability.MilliCPU = math.MaxFloat64
-		}
-		if attr.capability.Memory <= 0 {
-			attr.capability.Memory = math.MaxFloat64
-		}
+	realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(qAttr.guarantee)
+	qAttr.realCapability = realCapability
+	if qAttr.capability.MilliCPU <= 0 {
+		qAttr.capability.MilliCPU = realCapability.MilliCPU
 	}
-
-	// initialize guarantee from queue.Queue.Spec.Guarantee.Resource.
-	if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
-		attr.guarantee = api.NewResource(queue.Queue.Spec.Guarantee.Resource)
+	if qAttr.capability.Memory <= 0 {
+		qAttr.capability.Memory = realCapability.Memory
 	}
-
-	// initialize realCapability from p.totalResource, p.totalGuarantee and attr.guarantee.
-	realCapability := api.ExceededPart(p.totalNormalResource, p.totalNormalGuarantee).Add(attr.guarantee)
-	if attr.capability == nil {
-		attr.capability = api.EmptyResource()
-		attr.realCapability = realCapability
-	} else {
-		realCapability.MinDimensionResource(attr.capability, api.Infinity)
-		attr.realCapability = realCapability
+	if !QueueHasCardQuota(queue.Queue) {
+		qAttr.capability.ScalarResources = realCapability.ScalarResources
 	}
-
-	// initialize card resources
-	cardResources := p.getCardResourcesByQueue(queue.Queue)
-	setScalarResources(attr.capability, cardResources)
-	setScalarResources(attr.deserved, cardResources)
-	setScalarResources(attr.guarantee, cardResources)
-	setScalarResources(attr.realCapability, cardResources)
-
-	return attr
+	return qAttr
 }
 
-// getCardResourcesByQueue returns the card resources of a queue.
-func (p *Plugin) getCardResourcesByQueue(q *scheduling.Queue) map[v1.ResourceName]float64 {
-	cardResource := map[v1.ResourceName]float64{}
-	rawCardResource := GetCardResourceFromAnnotations(q.Annotations, QueueAnnotationKeyCardQuota)
-	for cardName, cardCountMilli := range rawCardResource {
+// newQueueResourceSupportingCard creates a new resource object from resource list
+func (p *Plugin) newQueueResourceSupportingCard(q *scheduling.Queue, rl v1.ResourceList) *api.Resource {
+	var (
+		queueResource     = api.NewResource(rl)
+		queueCardResource = GetCardResourceFromAnnotations(q.Annotations, QueueAnnotationKeyCardQuota)
+	)
+	if queueResource.ScalarResources == nil {
+		queueResource.ScalarResources = make(map[v1.ResourceName]float64)
+	}
+	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
+		queueResource.ScalarResources[cardName] = cardCountMilli
 		// convert card name to real resource name, and add the card count to the resource.
 		// for example, convert "NVIDIA-H200" to "nvidia.com/gpu"
 		cardResourceName := p.cardNameToResourceName[cardName]
@@ -227,21 +203,9 @@ func (p *Plugin) getCardResourcesByQueue(q *scheduling.Queue) map[v1.ResourceNam
 			klog.Warningf("No resource name found for card <%s> in queue <%s>", cardName, q.Name)
 			continue
 		}
-
-		cardResource[cardName] = cardCountMilli
-		cardResource[cardResourceName] = cardCountMilli
+		queueResource.ScalarResources[cardResourceName] += cardCountMilli
 	}
-	return cardResource
-}
-
-// setScalarResources sets the scalar resources of a resource.
-func setScalarResources(resource *api.Resource, scalar map[v1.ResourceName]float64) {
-	for name, quant := range scalar {
-		if resource.ScalarResources == nil {
-			resource.ScalarResources = map[v1.ResourceName]float64{}
-		}
-		resource.ScalarResources[name] = quant
-	}
+	return queueResource
 }
 
 // buildQueueMetrics builds the metrics for all queues in the session.
@@ -270,12 +234,9 @@ func (p *Plugin) buildQueueMetrics(ssn *framework.Session) {
 			)
 			continue
 		}
-		// get card resources
-		cardResources := p.getCardResourcesByQueue(queue.Queue)
 		deservedCPU, deservedMem, scalarResources := 0.0, 0.0, map[v1.ResourceName]float64{}
 		if queue.Queue.Spec.Deserved != nil {
-			attr := api.NewResource(queue.Queue.Spec.Deserved)
-			setScalarResources(attr, cardResources)
+			attr := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Deserved)
 			deservedCPU = attr.MilliCPU
 			deservedMem = attr.Memory
 			scalarResources = attr.ScalarResources
@@ -285,13 +246,11 @@ func (p *Plugin) buildQueueMetrics(ssn *framework.Session) {
 		metrics.UpdateQueueRequest(queueInfo.Name, 0, 0, map[v1.ResourceName]float64{})
 		guarantee := api.EmptyResource()
 		if len(queue.Queue.Spec.Guarantee.Resource) != 0 {
-			guarantee = api.NewResource(queue.Queue.Spec.Guarantee.Resource)
-			setScalarResources(guarantee, cardResources)
+			guarantee = p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
 		}
-		realCapacity := api.ExceededPart(p.totalNormalResource, p.totalNormalGuarantee).Add(guarantee)
+		realCapacity := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(guarantee)
 		if len(queue.Queue.Spec.Capability) > 0 {
-			capacity := api.NewResource(queue.Queue.Spec.Capability)
-			setScalarResources(capacity, cardResources)
+			capacity := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Capability)
 			realCapacity.MinDimensionResource(capacity, api.Infinity)
 			metrics.UpdateQueueCapacity(
 				queueInfo.Name, capacity.MilliCPU, capacity.Memory, capacity.ScalarResources,

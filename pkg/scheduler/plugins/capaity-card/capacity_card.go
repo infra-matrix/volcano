@@ -28,6 +28,7 @@ import (
 	"k8s.io/klog/v2"
 	"volcano.sh/volcano/pkg/scheduler/api"
 	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/plugins/util"
 )
 
 const (
@@ -77,8 +78,6 @@ type Plugin struct {
 	queueOpts              map[api.QueueID]*queueAttr
 	totalResource          *api.Resource
 	totalGuarantee         *api.Resource
-	totalNormalResource    *api.Resource
-	totalNormalGuarantee   *api.Resource
 	nodeLister             v1.NodeLister
 	nodeCardInfos          map[string]NodeCardResourceInfo
 	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
@@ -90,8 +89,6 @@ func New(_ framework.Arguments) framework.Plugin {
 		queueOpts:              map[api.QueueID]*queueAttr{},
 		totalResource:          api.EmptyResource(),
 		totalGuarantee:         api.EmptyResource(),
-		totalNormalResource:    api.EmptyResource(),
-		totalNormalGuarantee:   api.EmptyResource(),
 		nodeCardInfos:          map[string]NodeCardResourceInfo{},
 		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
 	}
@@ -105,27 +102,41 @@ func (p *Plugin) Name() string {
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	p.buildEventRecorder(ssn)
-	p.buildTotalResource(ssn)
-	p.buildQueueAttrs(ssn)
-	p.buildQueueMetrics(ssn)
+	readyToSchedule := p.buildTotalResource(ssn)
+	if readyToSchedule {
+		p.buildQueueAttrs(ssn)
+		p.buildQueueMetrics(ssn)
+	}
 
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
+	isCardUnlimitedCpuMemory := p.IsCardUnlimitedCpuMemory(ssn)
+	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", isCardUnlimitedCpuMemory)
+
 	// Job enqueueable check.
 	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
 		jobInfo := obj.(*api.JobInfo)
-		return p.JobEnqueueableFn(ssn, jobInfo)
+		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject job <%s/%s>.",
+				p.Name(), jobInfo.Namespace, jobInfo.Name,
+			)
+			return util.Reject
+		}
+		return p.JobEnqueueableFn(ssn, jobInfo, isCardUnlimitedCpuMemory)
 	})
 
 	// Task allocatable check.
 	ssn.AddAllocatableFn(p.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
-		return p.AllocatableFn(queue, candidate)
-	})
-
-	// Node filter specially for multi-card tasks.
-	ssn.AddPredicateFn(p.Name(), func(ti *api.TaskInfo, ni *api.NodeInfo) error {
-		return p.PredicateFn(ssn, ti, ni)
+		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject task <%s/%s>.",
+				p.Name(), candidate.Namespace, candidate.Name,
+			)
+			return false
+		}
+		return p.AllocatableFn(queue, candidate, isCardUnlimitedCpuMemory)
 	})
 
 	// It updates the queue's allocated resource and share
@@ -149,6 +160,7 @@ func (p *Plugin) OnSessionClose(_ *framework.Session) {
 	p.cardNameToResourceName = nil
 }
 
+// IsCardUnlimitedCpuMemory checks if the card resource is unlimited cpu memory.
 func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 	for _, tier := range ssn.Tiers {
 		for _, plugin := range tier.Plugins {
@@ -166,5 +178,19 @@ func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 			return cardUnlimitedCpuMemoryBool
 		}
 	}
+	return false
+}
+
+// HasCardResource checks whether the job has card resource.
+func (p *Plugin) HasCardResource(resources *api.Resource) bool {
+	for cardName, resourceName := range p.cardNameToResourceName {
+		if _, ok := resources.ScalarResources[resourceName]; ok {
+			return true
+		}
+		if _, ok := resources.ScalarResources[cardName]; ok {
+			return true
+		}
+	}
+
 	return false
 }

@@ -23,12 +23,12 @@ limitations under the License.
 package capacitycard
 
 import (
-	`fmt`
-	`strings`
+	"fmt"
+	"strings"
 
-	corev1 `k8s.io/api/core/v1`
-	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/framework`
+	corev1 "k8s.io/api/core/v1"
+	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/framework"
 )
 
 // PredicateFn checks if a task can be scheduled on the node.
@@ -40,15 +40,10 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 		// no card name requested, might be CPU type task.
 		return nil
 	}
-	// if no multi-cards requested, no need to check here.
-	if !strings.Contains(taskCardName, MultiCardSeparator) {
-		return nil
-	}
 
 	var (
 		taskJob            = ssn.Jobs[ti.Job]
 		qAttr              = p.queueOpts[taskJob.Queue]
-		queueCapability    = qAttr.capability
 		taskMultiCardNames = strings.Split(taskCardName, MultiCardSeparator)
 		availableCardNames = make([]string, 0)
 	)
@@ -63,7 +58,7 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 	if len(availableCardNames) == 0 {
 		return fmt.Errorf(
 			`task <%s/%s> in queue <%s> cannot be assigned to node <%s>, no available card %v found on node`,
-			ti.Namespace, ti.Name, qAttr.name, ni.Name, availableCardNames,
+			ti.Namespace, ti.Name, qAttr.name, ni.Name, taskCardName,
 		)
 	}
 
@@ -71,40 +66,43 @@ func (p *Plugin) PredicateFn(ssn *framework.Session, ti *api.TaskInfo, ni *api.N
 	// as queue quota is dynamically changed when other jobs in the same queue are both being scheduled
 	// in current session.
 
-	var (
-		logMsg           = ""
-		taskReqCardCount = ti.Resreq.ScalarResources[corev1.ResourceName(taskCardName)]
-	)
-	if taskReqCardCount == 0 {
-		// when bound to node, the multi-card name task resource name might be changed to the real card name,
-		// it so here does some fallback check.
-		for _, cardName := range taskMultiCardNames {
-			if count, ok := ti.Resreq.ScalarResources[corev1.ResourceName(cardName)]; ok && count > 0 {
-				taskReqCardCount = count
-				break
-			}
-		}
-	}
-	for _, availableCardName := range availableCardNames {
-		var (
-			cardQuotaInQueue  = queueCapability.ScalarResources[corev1.ResourceName(availableCardName)]
-			toBeUsedCardCount = qAttr.allocated.ScalarResources[corev1.ResourceName(availableCardName)] +
-				taskReqCardCount
-		)
-		if cardQuotaInQueue >= toBeUsedCardCount {
-			// allow the task to be scheduled on the node, at least one card quota is enough.
-			return nil
-		}
-		if logMsg != "" {
-			logMsg += "; "
-		}
-		logMsg += fmt.Sprintf(
-			"%s: totalToBeUsedCardCount <%v>, cardQuotaInQueue <%v>",
-			availableCardName, toBeUsedCardCount, cardQuotaInQueue,
-		)
-	}
-	return fmt.Errorf(
-		`task <%s/%s> in queue <%s> cannot be assigned to node <%s>, no available card quota %s`,
-		ti.Namespace, ti.Name, qAttr.name, ni.Name, logMsg,
-	)
+	// var (
+	//  queueCapability  = qAttr.capability
+	// 	logMsg           = ""
+	// 	taskReqCardCount = ti.Resreq.ScalarResources[corev1.ResourceName(taskCardName)]
+	// )
+	// if taskReqCardCount == 0 {
+	// 	// when bound to node, the multi-card name task resource name might be changed to the real card name,
+	// 	// it so here does some fallback check.
+	// 	for _, cardName := range taskMultiCardNames {
+	// 		if count, ok := ti.Resreq.ScalarResources[corev1.ResourceName(cardName)]; ok && count > 0 {
+	// 			taskReqCardCount = count
+	// 			break
+	// 		}
+	// 	}
+	// }
+	// for _, availableCardName := range availableCardNames {
+	// 	var (
+	// 		cardQuotaInQueue  = queueCapability.ScalarResources[corev1.ResourceName(availableCardName)]
+	// 		toBeUsedCardCount = qAttr.allocated.ScalarResources[corev1.ResourceName(availableCardName)] +
+	// 			taskReqCardCount
+	// 	)
+	// 	if cardQuotaInQueue >= toBeUsedCardCount {
+	// 		// allow the task to be scheduled on the node, at least one card quota is enough.
+	// 		return nil
+	// 	}
+	// 	if logMsg != "" {
+	// 		logMsg += "; "
+	// 	}
+	// 	logMsg += fmt.Sprintf(
+	// 		"%s: totalToBeUsedCardCount <%v>, cardQuotaInQueue <%v>",
+	// 		availableCardName, toBeUsedCardCount, cardQuotaInQueue,
+	// 	)
+	// }
+	// return fmt.Errorf(
+	// 	`task <%s/%s> in queue <%s> cannot be assigned to node <%s>, no available card quota %s`,
+	// 	ti.Namespace, ti.Name, qAttr.name, ni.Name, logMsg,
+	// )
+
+	return nil
 }

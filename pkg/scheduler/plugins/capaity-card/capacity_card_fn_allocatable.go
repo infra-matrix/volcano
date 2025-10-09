@@ -26,14 +26,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"volcano.sh/apis/pkg/apis/scheduling"
-	"volcano.sh/volcano/pkg/cli/queue"
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // AllocatableFn checks whether the task can be allocated, which does the queue-level capacity check.
 // If it returns true, which will do the following aspects to resources:
 // 1. Pod phase will be changed from Pending to Running.
-func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
+func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo, isCardUnlimitedCpuMemory bool) bool {
 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
 		klog.V(3).Infof(
 			"Queue <%s> current state: %s, cannot allocate task <%s/%s>.",
@@ -41,23 +40,48 @@ func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bo
 		)
 		return false
 	}
-
-	return p.isTaskAllocatable(p.queueOpts[queue.UID], candidate)
+	return p.isTaskAllocatable(p.queueOpts[queue.UID], candidate, isCardUnlimitedCpuMemory)
 }
 
 // isTaskAllocatable checks whether the task can be allocated in the queue according to the queue's real capability.
-func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
-	totalToBeAllocated := qAttr.allocated.Clone().Add(ti.Resreq)
-
-	// check cpu and memory
-	cpuMemoryReq := &api.Resource{
-		MilliCPU: ti.Resreq.MilliCPU,
-		Memory:   ti.Resreq.Memory,
-	}
-	if !totalToBeAllocated.LessEqualWithDimension(qAttr.realCapability, cpuMemoryReq) {
-		klog.V(3).Infof("Queue <%v>: realCapability <%v>, allocated <%v>; Candidate <%v>: resource request <%v>",
-			queue.Name, qAttr.realCapability, qAttr.allocated, ti.Name, ti.Resreq)
-		return false
+func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo, isCardUnlimitedCpuMemory bool) bool {
+	var (
+		taskReqResource    = ti.Resreq
+		queueCapability    = qAttr.capability
+		totalToBeAllocated = qAttr.allocated.Clone().Add(taskReqResource)
+	)
+	// check cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
+	if !isCardUnlimitedCpuMemory || !p.HasCardResource(taskReqResource) {
+		// check cpu and memory
+		cpuMemoryReq := &api.Resource{
+			MilliCPU: taskReqResource.MilliCPU,
+			Memory:   taskReqResource.Memory,
+		}
+		if !totalToBeAllocated.LessEqualWithDimension(queueCapability, cpuMemoryReq) {
+			klog.V(3).Infof("Queue <%v> has not enough CPU or memory: capability cpu: <%v>, memory: <%v>, total to be allocated cpu: <%v>, memory: <%v>; task <%v/%v>: resource request cpu: <%v>, memory: <%v>",
+				qAttr.name,
+				queueCapability.MilliCPU,
+				queueCapability.Memory,
+				totalToBeAllocated.MilliCPU,
+				totalToBeAllocated.Memory,
+				ti.Namespace,
+				ti.Name,
+				taskReqResource.MilliCPU,
+				taskReqResource.Memory,
+			)
+			eventRecorder.Eventf(
+				ti.Pod, v1.EventTypeWarning, InsufficientCPUMemoryQuota,
+				"Queue <%v> has not enough CPU or memory: capability cpu: <%v>, memory: <%v>, total to be allocated cpu: <%v>, memory: <%v>, resource request cpu: <%v>, memory: <%v>",
+				qAttr.name,
+				queueCapability.MilliCPU,
+				queueCapability.Memory,
+				totalToBeAllocated.MilliCPU,
+				totalToBeAllocated.Memory,
+				taskReqResource.MilliCPU,
+				taskReqResource.Memory,
+			)
+			return false
+		}
 	}
 
 	// if r.scalar is nil, whatever rr.scalar is, r is less or equal to rr
@@ -65,12 +89,12 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		return true
 	}
 
-	for scalarName, scalarQuant := range ti.Resreq.ScalarResources {
+	for scalarName, scalarQuant := range taskReqResource.ScalarResources {
 		if api.IsIgnoredScalarResource(scalarName) {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeAllocated, qAttr.realCapability,
+			scalarName, scalarQuant, totalToBeAllocated, queueCapability,
 		)
 		if checkResult.Ok {
 			continue
@@ -85,7 +109,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		)
 		if ti.Pod != nil {
 			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, "InsufficientScalarQuota",
+				ti.Pod, v1.EventTypeWarning, InsufficientScalarQuota,
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name,
 				checkResult.NoEnoughScalarName,

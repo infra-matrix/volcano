@@ -32,6 +32,14 @@ import (
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
+const (
+	// InsufficientCPUMemoryQuota is insufficient CPU or memory quota event type
+	InsufficientCPUMemoryQuota = "InsufficientCPUMemoryQuota"
+
+	// InsufficientScalarQuota is insufficient scalar quota event type
+	InsufficientScalarQuota = "InsufficientScalarQuota"
+)
+
 // QueueHasCardQuota checks whether the queue has card quota annotation.
 func QueueHasCardQuota(q *scheduling.Queue) bool {
 	_, ok := q.Annotations[QueueAnnotationKeyCardQuota]
@@ -39,8 +47,8 @@ func QueueHasCardQuota(q *scheduling.Queue) bool {
 }
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.
-func GetCardResourceFromAnnotations(annotations map[string]string, key string) map[v1.ResourceName]float64 {
-	cardResource := map[v1.ResourceName]float64{}
+func GetCardResourceFromAnnotations(annotations map[string]string, key string) *api.Resource {
+	cardResource := api.EmptyResource()
 	if cardJson, ok := annotations[key]; ok {
 		cardMap := make(map[string]int)
 		if err := json.Unmarshal([]byte(cardJson), &cardMap); err != nil {
@@ -50,9 +58,11 @@ func GetCardResourceFromAnnotations(annotations map[string]string, key string) m
 			)
 			return cardResource
 		}
-
+		if cardResource.ScalarResources == nil {
+			cardResource.ScalarResources = make(map[v1.ResourceName]float64)
+		}
 		for cardName, cardCount := range cardMap {
-			cardResource[v1.ResourceName(cardName)] = float64(
+			cardResource.ScalarResources[v1.ResourceName(cardName)] = float64(
 				cardCount * cardCountQuantityMultiplier,
 			)
 		}
@@ -83,12 +93,26 @@ func CheckSingleScalarResource(
 	// in which the card name is extracted from node's label.
 	//
 	// In multi-cards name, any one of the card can satisfy the request is ok.
-	multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
-	for _, cardName := range multiCardNames {
-		result.ToBeUsedScalarQuant += toBeUsedResource.ScalarResources[v1.ResourceName(cardName)]
-		result.QueueCapabilityQuant += queueCapability.ScalarResources[v1.ResourceName(cardName)]
+	if strings.Contains(scalarName.String(), MultiCardSeparator) {
+		multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
+		// If the scalar name is multi-cards name, the scalar quant should be added to each card.
+		singleCardToBeUsedResource := toBeUsedResource.Clone()
+		for _, cardName := range multiCardNames {
+			singleCardToBeUsedResource.ScalarResources[v1.ResourceName(cardName)] += scalarQuant
+			if result = CheckSingleScalarResource(
+				v1.ResourceName(cardName), scalarQuant, singleCardToBeUsedResource, queueCapability,
+			); result.Ok {
+				return result
+			}
+		}
+		result.Ok = false
+		result.NoEnoughScalarName = scalarName
+		result.NoEnoughScalarCount = scalarQuant
+		return result
 	}
 
+	result.ToBeUsedScalarQuant = toBeUsedResource.ScalarResources[scalarName]
+	result.QueueCapabilityQuant = queueCapability.ScalarResources[scalarName]
 	if scalarQuant > 0 && result.ToBeUsedScalarQuant > result.QueueCapabilityQuant {
 		result.Ok = false
 		result.NoEnoughScalarName = scalarName

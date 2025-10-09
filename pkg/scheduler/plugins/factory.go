@@ -24,7 +24,7 @@ import (
 	"volcano.sh/volcano/pkg/scheduler/framework"
 	"volcano.sh/volcano/pkg/scheduler/plugins/binpack"
 	"volcano.sh/volcano/pkg/scheduler/plugins/capacity"
-	capacitycard "volcano.sh/volcano/pkg/scheduler/plugins/capacity-card"
+	capacitycard "volcano.sh/volcano/pkg/scheduler/plugins/capaity-card"
 	"volcano.sh/volcano/pkg/scheduler/plugins/cdp"
 	"volcano.sh/volcano/pkg/scheduler/plugins/conformance"
 	"volcano.sh/volcano/pkg/scheduler/plugins/deviceshare"
