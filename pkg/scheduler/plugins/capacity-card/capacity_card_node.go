@@ -168,6 +168,14 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 			}
 		}
 	}
+
+	if nodeCardInfo.CardInfo.Name != "" && len(nodeCardInfo.CardResource) == 0 {
+		klog.Warningf("Node <%s> has card <%s> but no card resource found.",
+			node.Name,
+			nodeCardInfo.CardInfo.Name,
+		)
+	}
+
 	p.nodeCardInfos[node.Name] = nodeCardInfo
 	return nodeCardInfo
 }
