@@ -23,13 +23,27 @@ limitations under the License.
 package capacitycard
 
 import (
-	`encoding/json`
-	`strings`
+	"encoding/json"
+	"strings"
 
-	v1 `k8s.io/api/core/v1`
-	`k8s.io/klog/v2`
-	`volcano.sh/apis/pkg/apis/scheduling`
-	`volcano.sh/volcano/pkg/scheduler/api`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"volcano.sh/apis/pkg/apis/scheduling"
+	"volcano.sh/volcano/pkg/scheduler/api"
+)
+
+const (
+	// EventTypeInsufficientCPUMemoryQuota is empty queue capability event type
+	EventTypeEmptyQueueCapability = "EmptyQueueCapability"
+
+	// EventTypeInsufficientCPUQuota is insufficient CPU quota event type
+	EventTypeInsufficientCPUQuota = "InsufficientCPUQuota"
+
+	// EventTypeInsufficientMemoryQuota is insufficient memory quota event type
+	EventTypeInsufficientMemoryQuota = "InsufficientMemoryQuota"
+
+	// EventTypeInsufficientScalarQuota is insufficient scalar quota event type
+	EventTypeInsufficientScalarQuota = "InsufficientScalarQuota"
 )
 
 // QueueHasCardQuota checks whether the queue has card quota annotation.
@@ -87,15 +101,23 @@ func CheckSingleScalarResource(
 	// In multi-cards name, any one of the card can satisfy the request is ok.
 	if strings.Contains(scalarName.String(), MultiCardSeparator) {
 		multiCardNames := strings.Split(scalarName.String(), MultiCardSeparator)
+		// If the scalar name is multi-cards name, the scalar quant should be added to each card.
+		// The multi-cards name is given like: NVIDIA-GTX-GeForce-4090D|NVIDIA-H200 .
+		// Now has allocated 5 NVIDIA-GTX-GeForce-4090D and 8 NVIDIA-H200, requests another 2 NVIDIA-GTX-GeForce-4090D|NVIDIA-H200
+		// The `toBeUsedResource` scalar quant is {"NVIDIA-GTX-GeForce-4090D|NVIDIA-H200": 2, "NVIDIA-GTX-GeForce-4090D": 5, "NVIDIA-H200": 8}
+		// NVIDIA-GTX-GeForce-4090D and NVIDIA-H200 in `toBeUsedResource` do not contain the requested 2 card, so it should be added to each card name.
+		// `multiCardToBeUsedResource` scalar quant is {"NVIDIA-GTX-GeForce-4090D|NVIDIA-H200": 2, "NVIDIA-GTX-GeForce-4090D": 7, "NVIDIA-H200": 10}
+		multiCardToBeUsedResource := toBeUsedResource.Clone()
 		for _, cardName := range multiCardNames {
+			multiCardToBeUsedResource.ScalarResources[v1.ResourceName(cardName)] += scalarQuant
 			if result = CheckSingleScalarResource(
-				v1.ResourceName(cardName), scalarQuant, toBeUsedResource, queueCapability,
+				v1.ResourceName(cardName), scalarQuant, multiCardToBeUsedResource, queueCapability,
 			); result.Ok {
 				return result
 			}
 		}
 		result.Ok = false
-		result.NoEnoughScalarName = v1.ResourceName(multiCardNames[0])
+		result.NoEnoughScalarName = scalarName
 		result.NoEnoughScalarCount = scalarQuant
 		return result
 	}

@@ -17,10 +17,10 @@ limitations under the License.
 package capacitycard
 
 import (
-	`fmt`
+	"fmt"
 	"testing"
 
-	`k8s.io/apimachinery/pkg/api/resource`
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestNewMilliQuantity(t *testing.T) {

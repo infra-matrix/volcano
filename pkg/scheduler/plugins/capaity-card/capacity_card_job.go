@@ -23,12 +23,12 @@ limitations under the License.
 package capacitycard
 
 import (
-	`fmt`
-	`strings`
+	"fmt"
+	"strings"
 
-	v1 `k8s.io/api/core/v1`
+	v1 "k8s.io/api/core/v1"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
-	`volcano.sh/volcano/pkg/scheduler/api`
+	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // JobInfo describes the job used in capacity plugin.

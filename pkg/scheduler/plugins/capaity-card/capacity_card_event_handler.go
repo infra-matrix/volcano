@@ -23,11 +23,11 @@ limitations under the License.
 package capacitycard
 
 import (
-	`strings`
+	"strings"
 
-	`k8s.io/klog/v2`
-	`volcano.sh/volcano/pkg/scheduler/framework`
-	`volcano.sh/volcano/pkg/scheduler/metrics`
+	"k8s.io/klog/v2"
+	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/metrics"
 )
 
 // OnAllocate is invoked when a task is allocated.

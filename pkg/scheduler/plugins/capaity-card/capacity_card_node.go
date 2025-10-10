@@ -23,18 +23,18 @@ limitations under the License.
 package capacitycard
 
 import (
-	`fmt`
-	`math`
-	`regexp`
-	`strconv`
-	`strings`
+	"fmt"
+	"math"
+	"regexp"
+	"strconv"
+	"strings"
 
-	corev1 `k8s.io/api/core/v1`
-	`k8s.io/apimachinery/pkg/api/resource`
-	`k8s.io/apimachinery/pkg/labels`
-	`k8s.io/klog/v2`
-	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/framework`
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/klog/v2"
+	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/framework"
 )
 
 // CardInfo defines the basic information of a card.
@@ -77,14 +77,14 @@ func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 }
 
 // buildTotalResourceFromNodes builds the total resource of the cluster from the given nodes.
-func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node, ) {
+func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node) {
 	var (
 		totalNormalResource = make(corev1.ResourceList) // CPU, Memory, EphemeralStorage, etc.
 		totalCardResource   = make(corev1.ResourceList) // GPU/NPU/PPU cards, etc.
 	)
 	for _, node := range nodes {
 		addResourceList(
-			totalNormalResource, node.Status.Capacity.DeepCopy(),
+			totalNormalResource, node.Status.Allocatable.DeepCopy(),
 		)
 		nodeCardInfo := p.getCardResourceFromNode(node)
 		addResourceList(totalCardResource, nodeCardInfo.CardResource)
@@ -108,7 +108,7 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 		CardResource:           map[corev1.ResourceName]resource.Quantity{},
 		CardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
 	}
-	for resName, cardCapacity := range node.Status.Capacity {
+	for resName, cardCapacity := range node.Status.Allocatable {
 		if cardCapacity.Value() <= 0 {
 			continue
 		}

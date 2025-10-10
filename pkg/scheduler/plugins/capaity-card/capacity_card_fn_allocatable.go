@@ -23,10 +23,10 @@ limitations under the License.
 package capacitycard
 
 import (
-	v1 `k8s.io/api/core/v1`
-	`k8s.io/klog/v2`
-	`volcano.sh/apis/pkg/apis/scheduling`
-	`volcano.sh/volcano/pkg/scheduler/api`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"volcano.sh/apis/pkg/apis/scheduling"
+	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // AllocatableFn checks whether the task can be allocated, which does the queue-level capacity check.
@@ -65,7 +65,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			)
 			if ti.Pod != nil {
 				eventRecorder.Eventf(
-					ti.Pod, v1.EventTypeWarning, "EmptyQueueCapability",
+					ti.Pod, v1.EventTypeWarning, EventTypeEmptyQueueCapability,
 					"Queue <%s> capability <%s> is empty, deny it to allocate",
 					qAttr.name, queueCapability.String(),
 				)
@@ -79,43 +79,46 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		return true
 	}
 
-	if taskReqResource.MilliCPU > 0 && totalToBeAllocated.MilliCPU > queueCapability.MilliCPU {
-		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
-			ti.Namespace, ti.Name, qAttr.name,
-			taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
-		)
-		if ti.Pod != nil {
-			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, "InsufficientCPUQuota",
+	// check cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
+	if !p.isCardUnlimitedCpuMemory || !p.HasCardResource(taskReqResource) {
+		if taskReqResource.MilliCPU > 0 && totalToBeAllocated.MilliCPU > queueCapability.MilliCPU {
+			klog.V(2).Infof(
+				"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
+				ti.Namespace, ti.Name, qAttr.name,
+				taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
+			)
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, EventTypeInsufficientCPUQuota,
+					"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
+					qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
+				)
+			}
+			klog.V(3).Infof(
 				"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
 			)
+			return false
 		}
-		klog.V(3).Infof(
-			"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
-			qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
-		)
-		return false
-	}
-	if taskReqResource.Memory > 0 && totalToBeAllocated.Memory > queueCapability.Memory {
-		var (
-			taskReqResourceMi    = taskReqResource.Memory / 1024 / 1024
-			totalToBeAllocatedMi = totalToBeAllocated.Memory / 1024 / 1024
-			queueCapabilityMi    = queueCapability.Memory / 1024 / 1024
-		)
-		klog.V(2).Infof(
-			"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
-			ti.Namespace, ti.Name, qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
-		)
-		if ti.Pod != nil {
-			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, "InsufficientMemoryQuota",
-				"Queue <%s> has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
-				qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
+		if taskReqResource.Memory > 0 && totalToBeAllocated.Memory > queueCapability.Memory {
+			var (
+				taskReqResourceMi    = taskReqResource.Memory / 1024 / 1024
+				totalToBeAllocatedMi = totalToBeAllocated.Memory / 1024 / 1024
+				queueCapabilityMi    = queueCapability.Memory / 1024 / 1024
 			)
+			klog.V(2).Infof(
+				"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
+				ti.Namespace, ti.Name, qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
+			)
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, EventTypeInsufficientMemoryQuota,
+					"Queue <%s> has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
+					qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
+				)
+			}
+			return false
 		}
-		return false
 	}
 
 	// if r.scalar is nil, whatever rr.scalar is, r is less or equal to rr
@@ -143,7 +146,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		)
 		if ti.Pod != nil {
 			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, "InsufficientScalarQuota",
+				ti.Pod, v1.EventTypeWarning, EventTypeInsufficientScalarQuota,
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name,
 				checkResult.NoEnoughScalarName,

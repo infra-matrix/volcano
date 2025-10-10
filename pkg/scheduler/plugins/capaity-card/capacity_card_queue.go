@@ -23,14 +23,14 @@ limitations under the License.
 package capacitycard
 
 import (
-	v1 `k8s.io/api/core/v1`
-	`k8s.io/klog/v2`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
 	"volcano.sh/apis/pkg/apis/scheduling"
-	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/api/helpers`
-	`volcano.sh/volcano/pkg/scheduler/framework`
-	`volcano.sh/volcano/pkg/scheduler/metrics`
-	`volcano.sh/volcano/pkg/scheduler/plugins/util`
+	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/api/helpers"
+	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/metrics"
+	"volcano.sh/volcano/pkg/scheduler/plugins/util"
 )
 
 // queueAttr is used to store the attributes of a queue.
@@ -49,7 +49,7 @@ type queueAttr struct {
 }
 
 // buildQueueAttrs builds the attributes for all queues in the session.
-func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
+func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 	// initialize totalGuarantee from all queues.
 	for _, queue := range ssn.Queues {
 		guarantee := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
@@ -90,7 +90,6 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 		}
 		return 1
 	})
-	return true
 }
 
 // buildQueueAttrByJob builds/updates the attributes of a queue by a job.
