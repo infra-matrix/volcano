@@ -45,8 +45,23 @@ func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bo
 
 // isTaskAllocatable checks whether the task can be allocated in the queue according to the queue's real capability.
 func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
+	taskReqResource, err := p.GetTaskRequestResources(ti)
+	if err != nil {
+		klog.V(5).Infof(
+			"Get request resource for Task <%s/%s> failed, Queue <%s>, error: <%s>",
+			ti.Namespace, ti.Name, qAttr.name, err.Error(),
+		)
+		if ti.Pod != nil {
+			eventRecorder.Eventf(
+				ti.Pod, v1.EventTypeWarning, EventTypeGetTaskRequestResourceFailed,
+				"Get request resource failed, Queue <%s>, error: <%s>",
+				qAttr.name, err.Error(),
+			)
+		}
+		return false
+	}
+
 	var (
-		taskReqResource    = ti.Resreq
 		queueCapability    = qAttr.capability
 		totalToBeAllocated = qAttr.allocated.Clone().Add(taskReqResource)
 	)

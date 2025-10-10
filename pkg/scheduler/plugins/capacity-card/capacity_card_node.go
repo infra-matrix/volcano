@@ -83,9 +83,19 @@ func (p *Plugin) buildTotalResourceFromNodes(nodes []*corev1.Node) {
 		totalCardResource   = make(corev1.ResourceList) // GPU/NPU/PPU cards, etc.
 	)
 	for _, node := range nodes {
+		// calculate cpu and memory resource
+		cpuMemoryResource := make(corev1.ResourceList)
+		if cpu, ok := node.Status.Allocatable[corev1.ResourceCPU]; ok {
+			cpuMemoryResource[corev1.ResourceCPU] = cpu
+		}
+		if memory, ok := node.Status.Allocatable[corev1.ResourceMemory]; ok {
+			cpuMemoryResource[corev1.ResourceMemory] = memory
+		}
 		addResourceList(
-			totalNormalResource, node.Status.Allocatable.DeepCopy(),
+			totalNormalResource, cpuMemoryResource,
 		)
+
+		// calculate card resource
 		nodeCardInfo := p.getCardResourceFromNode(node)
 		addResourceList(totalCardResource, nodeCardInfo.CardResource)
 		for cardName, resourceName := range nodeCardInfo.CardNameToResourceName {
