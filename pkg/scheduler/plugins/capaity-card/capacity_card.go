@@ -75,12 +75,13 @@ const (
 
 // Plugin implements the capacity plugin.
 type Plugin struct {
-	queueOpts              map[api.QueueID]*queueAttr
-	totalResource          *api.Resource
-	totalGuarantee         *api.Resource
-	nodeLister             v1.NodeLister
-	nodeCardInfos          map[string]NodeCardResourceInfo
-	cardNameToResourceName map[corev1.ResourceName]corev1.ResourceName
+	queueOpts                map[api.QueueID]*queueAttr
+	totalResource            *api.Resource
+	totalGuarantee           *api.Resource
+	nodeLister               v1.NodeLister
+	nodeCardInfos            map[string]NodeCardResourceInfo
+	cardNameToResourceName   map[corev1.ResourceName]corev1.ResourceName
+	isCardUnlimitedCpuMemory bool
 }
 
 // New return capacity plugin.
@@ -111,8 +112,8 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
-	isCardUnlimitedCpuMemory := p.IsCardUnlimitedCpuMemory(ssn)
-	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", isCardUnlimitedCpuMemory)
+	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
+	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
 
 	// Job enqueueable check.
 	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
@@ -124,7 +125,7 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 			)
 			return util.Reject
 		}
-		return p.JobEnqueueableFn(ssn, jobInfo, isCardUnlimitedCpuMemory)
+		return p.JobEnqueueableFn(ssn, jobInfo)
 	})
 
 	// Task allocatable check.
@@ -136,7 +137,7 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 			)
 			return false
 		}
-		return p.AllocatableFn(queue, candidate, isCardUnlimitedCpuMemory)
+		return p.AllocatableFn(queue, candidate)
 	})
 
 	// It updates the queue's allocated resource and share

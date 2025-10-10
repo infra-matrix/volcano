@@ -32,7 +32,7 @@ import (
 // AllocatableFn checks whether the task can be allocated, which does the queue-level capacity check.
 // If it returns true, which will do the following aspects to resources:
 // 1. Pod phase will be changed from Pending to Running.
-func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo, isCardUnlimitedCpuMemory bool) bool {
+func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
 		klog.V(3).Infof(
 			"Queue <%s> current state: %s, cannot allocate task <%s/%s>.",
@@ -40,46 +40,83 @@ func (p *Plugin) AllocatableFn(queue *api.QueueInfo, candidate *api.TaskInfo, is
 		)
 		return false
 	}
-	return p.isTaskAllocatable(p.queueOpts[queue.UID], candidate, isCardUnlimitedCpuMemory)
+	return p.isTaskAllocatable(p.queueOpts[queue.UID], candidate)
 }
 
 // isTaskAllocatable checks whether the task can be allocated in the queue according to the queue's real capability.
-func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo, isCardUnlimitedCpuMemory bool) bool {
+func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 	var (
 		taskReqResource    = ti.Resreq
 		queueCapability    = qAttr.capability
 		totalToBeAllocated = qAttr.allocated.Clone().Add(taskReqResource)
 	)
-	// check cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
-	if !isCardUnlimitedCpuMemory || !p.HasCardResource(taskReqResource) {
-		// check cpu and memory
-		cpuMemoryReq := &api.Resource{
-			MilliCPU: taskReqResource.MilliCPU,
-			Memory:   taskReqResource.Memory,
+	if totalToBeAllocated == nil {
+		klog.V(5).Infof(
+			"Task <%s/%s>, Queue <%s> totalToBeAllocated is nil, allow it to allocate",
+			ti.Namespace, ti.Name, qAttr.name,
+		)
+		return true
+	}
+	if taskReqResource == nil {
+		if ok := totalToBeAllocated.LessEqual(queueCapability, api.Zero); !ok {
+			klog.V(5).Infof(
+				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to allocate",
+				ti.Namespace, ti.Name, qAttr.name, queueCapability.String(),
+			)
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, EventTypeEmptyQueueCapability,
+					"Queue <%s> capability <%s> is empty, deny it to allocate",
+					qAttr.name, queueCapability.String(),
+				)
+			}
+			return false
 		}
-		if !totalToBeAllocated.LessEqualWithDimension(queueCapability, cpuMemoryReq) {
-			klog.V(3).Infof("Queue <%v> has not enough CPU or memory: capability cpu: <%v>, memory: <%v>, total to be allocated cpu: <%v>, memory: <%v>; task <%v/%v>: resource request cpu: <%v>, memory: <%v>",
-				qAttr.name,
-				queueCapability.MilliCPU,
-				queueCapability.Memory,
-				totalToBeAllocated.MilliCPU,
-				totalToBeAllocated.Memory,
-				ti.Namespace,
-				ti.Name,
-				taskReqResource.MilliCPU,
-				taskReqResource.Memory,
+		klog.V(5).Infof(
+			"Task <%s/%s>, Queue <%s> request is nil, allow it to allocate",
+			ti.Namespace, ti.Name, qAttr.name,
+		)
+		return true
+	}
+
+	// check cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
+	if !p.isCardUnlimitedCpuMemory || !p.HasCardResource(taskReqResource) {
+		if taskReqResource.MilliCPU > 0 && totalToBeAllocated.MilliCPU > queueCapability.MilliCPU {
+			klog.V(2).Infof(
+				"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
+				ti.Namespace, ti.Name, qAttr.name,
+				taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
 			)
-			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, InsufficientCPUMemoryQuota,
-				"Queue <%v> has not enough CPU or memory: capability cpu: <%v>, memory: <%v>, total to be allocated cpu: <%v>, memory: <%v>, resource request cpu: <%v>, memory: <%v>",
-				qAttr.name,
-				queueCapability.MilliCPU,
-				queueCapability.Memory,
-				totalToBeAllocated.MilliCPU,
-				totalToBeAllocated.Memory,
-				taskReqResource.MilliCPU,
-				taskReqResource.Memory,
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, EventTypeInsufficientCPUQuota,
+					"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
+					qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
+				)
+			}
+			klog.V(3).Infof(
+				"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
+				qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
 			)
+			return false
+		}
+		if taskReqResource.Memory > 0 && totalToBeAllocated.Memory > queueCapability.Memory {
+			var (
+				taskReqResourceMi    = taskReqResource.Memory / 1024 / 1024
+				totalToBeAllocatedMi = totalToBeAllocated.Memory / 1024 / 1024
+				queueCapabilityMi    = queueCapability.Memory / 1024 / 1024
+			)
+			klog.V(2).Infof(
+				"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
+				ti.Namespace, ti.Name, qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
+			)
+			if ti.Pod != nil {
+				eventRecorder.Eventf(
+					ti.Pod, v1.EventTypeWarning, EventTypeInsufficientMemoryQuota,
+					"Queue <%s> has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
+					qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
+				)
+			}
 			return false
 		}
 	}
@@ -109,7 +146,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo, isCardUnl
 		)
 		if ti.Pod != nil {
 			eventRecorder.Eventf(
-				ti.Pod, v1.EventTypeWarning, InsufficientScalarQuota,
+				ti.Pod, v1.EventTypeWarning, EventTypeInsufficientScalarQuota,
 				"Queue <%s> has insufficient <%s> quota: requested <%v>, total would be <%v>, but capability is <%v>",
 				qAttr.name,
 				checkResult.NoEnoughScalarName,
