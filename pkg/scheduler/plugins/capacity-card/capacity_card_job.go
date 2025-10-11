@@ -35,6 +35,11 @@ import (
 type JobInfo struct {
 	*api.JobInfo
 
+	// allocated is the allocated cpu, memory and card resource to job. Ignore none card scalar resource.
+	allocated *api.Resource
+	// totalRequest is the total request cpu, memory and card resource to job. Ignore none card scalar resource.
+	totalRequest *api.Resource
+
 	// preCheckCardResource is the card resource retrieved from job annotation for pre-check purpose.
 	// Pre-check will prevent pending pod created(working in JobEnqueueableFn) when queue has no enough card resource.
 	// It is suggested to set this annotation for jobs which need card resource, although it is optional.
@@ -48,38 +53,46 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		job.PodGroup.Annotations,
 		JobAnnotationKeyCardRequest,
 	)
-	// reset job allocated resource, will recalculate it below
-	job.Allocated = api.EmptyResource()
+
+	// job allocated card resource,
+	allocated := api.EmptyResource()
+	if job.Allocated != nil {
+		allocated.MilliCPU = job.Allocated.MilliCPU
+		allocated.Memory = job.Allocated.Memory
+	}
 	// read task card request from task annotations.
 	realCardRequest := api.EmptyResource()
-	for taskId, ti := range job.Tasks {
+	for _, ti := range job.Tasks {
 		if ti.Pod != nil {
 			taskCardResource, err := p.getCardResourceFromTask(ti)
 			if err != nil {
 				return nil, err
 			}
 			realCardRequest.Add(taskCardResource)
-			// re-calculate the card request for task.
-			// this task info resource assignment will update the queue.Status.Allocated after session close.
-			for scalarName, scalarCount := range taskCardResource.ScalarResources {
-				// Note: this scalar setting will update the queue.Status.Allocated after session close.
-				ti.Resreq.SetScalar(scalarName, scalarCount)
+
+			if api.AllocatedStatus(ti.Status) {
+				allocated.Add(taskCardResource)
 			}
-			job.Tasks[taskId] = ti
-		}
-		if api.AllocatedStatus(ti.Status) {
-			job.Allocated.Add(ti.Resreq)
 		}
 	}
+
+	// job total request card resource
+	totalRequest := api.EmptyResource()
+	if job.TotalRequest != nil {
+		totalRequest.MilliCPU = job.TotalRequest.MilliCPU
+		totalRequest.Memory = job.TotalRequest.Memory
+	}
 	if realCardRequest.IsEmpty() {
-		job.TotalRequest.Add(preCheckCardResource)
+		totalRequest.Add(preCheckCardResource)
 	} else {
 		preCheckCardResource = realCardRequest
-		job.TotalRequest.Add(realCardRequest)
+		totalRequest.Add(realCardRequest)
 	}
 
 	return &JobInfo{
 		JobInfo:              job,
+		totalRequest:         totalRequest,
+		allocated:            allocated,
 		preCheckCardResource: preCheckCardResource,
 	}, nil
 }
@@ -87,18 +100,18 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 // GetMinResources return the min resources of PodGroup.
 func (ji *JobInfo) GetMinResources() *api.Resource {
 	jobResource := ji.JobInfo.GetMinResources()
-	jobResource.Add(ji.preCheckCardResource)
+	jobResource.ScalarResources = ji.preCheckCardResource.ScalarResources
 	return jobResource
 }
 
 // GetElasticResources returns those partly resources in allocated which are more than its minResource
 func (ji *JobInfo) GetElasticResources() *api.Resource {
-	if ji.Allocated == nil {
+	if ji.allocated == nil {
 		return api.EmptyResource()
 	}
 	var (
 		minResource = ji.GetMinResources()
-		elastic     = api.ExceededPart(ji.Allocated, minResource)
+		elastic     = api.ExceededPart(ji.allocated, minResource)
 	)
 	return elastic
 }
@@ -211,4 +224,22 @@ func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.
 		"no resource <%s> defined in reqests/limits for card <%s>",
 		cardResourceName, cardName,
 	)
+}
+
+// GetTaskRequestResources get the task request resources
+func (p *Plugin) GetTaskRequestResources(task *api.TaskInfo) (*api.Resource, error) {
+	taskCardResource, err := p.getCardResourceFromTask(task)
+	if err != nil {
+		return nil, err
+	}
+
+	// job total request card resource
+	totalRequest := api.EmptyResource()
+	if task.Resreq != nil {
+		totalRequest.MilliCPU = task.Resreq.MilliCPU
+		totalRequest.Memory = task.Resreq.Memory
+	}
+	totalRequest.Add(taskCardResource)
+
+	return totalRequest, nil
 }

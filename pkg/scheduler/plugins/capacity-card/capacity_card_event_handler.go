@@ -23,8 +23,6 @@ limitations under the License.
 package capacitycard
 
 import (
-	"strings"
-
 	"k8s.io/klog/v2"
 	"volcano.sh/volcano/pkg/scheduler/framework"
 	"volcano.sh/volcano/pkg/scheduler/metrics"
@@ -35,29 +33,18 @@ import (
 // especially card resource is being allocated during current scheduling session.
 func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 	var (
-		task            = event.Task
-		taskJob         = ssn.Jobs[task.Job]
-		taskCardName    = p.getCardNameFromTask(task)
-		taskReqResource = task.Resreq
-		qAttr           = p.queueOpts[taskJob.Queue]
+		task    = event.Task
+		taskJob = ssn.Jobs[task.Job]
+		qAttr   = p.queueOpts[taskJob.Queue]
 	)
 
-	// if multi-cards requested, it converts multi-cards resource to real card resource.
-	// for example, if a task requests "NVIDIA-H20|NVIDIA-H200" in its annotation,
-	// and it here converts it to real card resource according to the node it is allocated on.
-	if strings.Contains(taskCardName, MultiCardSeparator) {
-		cardResource, err := p.getCardResourceFromNodeNameForMultiCardTask(task, taskCardName)
-		if err != nil {
-			klog.Errorf(
-				"Failed to get card resource for multi-cards task <%s/%s>: %+v",
-				task.Namespace, task.Name, err,
-			)
-			return
-		}
-		taskReqResource = taskReqResource.Clone()
-		for scalarName, scalarCount := range cardResource.ScalarResources {
-			taskReqResource.SetScalar(scalarName, scalarCount)
-		}
+	taskReqResource, err := p.GetTaskRequestResources(task)
+	if err != nil {
+		klog.V(5).Infof(
+			"Get request resource for Task <%s/%s> failed, error: <%s>",
+			task.Namespace, task.Name, err.Error(),
+		)
+		return
 	}
 	qAttr.allocated.Add(taskReqResource)
 
@@ -74,29 +61,18 @@ func (p *Plugin) OnAllocate(ssn *framework.Session, event *framework.Event) {
 // OnDeallocate is invoked when a task is deallocated.
 func (p *Plugin) OnDeallocate(ssn *framework.Session, event *framework.Event) {
 	var (
-		task            = event.Task
-		taskJob         = ssn.Jobs[task.Job]
-		taskCardName    = p.getCardNameFromTask(task)
-		taskReqResource = task.Resreq
-		qAttr           = p.queueOpts[taskJob.Queue]
+		task    = event.Task
+		taskJob = ssn.Jobs[task.Job]
+		qAttr   = p.queueOpts[taskJob.Queue]
 	)
 
-	// if multi-cards requested, it converts multi-cards resource to real card resource.
-	// for example, if a task requests "NVIDIA-H20|NVIDIA-H200" in its annotation,
-	// and it here converts it to real card resource according to the node it is allocated on.
-	if strings.Contains(taskCardName, MultiCardSeparator) {
-		cardResource, err := p.getCardResourceFromNodeNameForMultiCardTask(task, taskCardName)
-		if err != nil {
-			klog.Errorf(
-				"Failed to get card resource for multi-cards task <%s/%s>: %+v",
-				task.Namespace, task.Name, err,
-			)
-			return
-		}
-		taskReqResource = taskReqResource.Clone()
-		for scalarName, scalarCount := range cardResource.ScalarResources {
-			taskReqResource.SetScalar(scalarName, scalarCount)
-		}
+	taskReqResource, err := p.GetTaskRequestResources(task)
+	if err != nil {
+		klog.V(5).Infof(
+			"Get request resource for Task <%s/%s> failed, error: <%s>",
+			task.Namespace, task.Name, err.Error(),
+		)
+		return
 	}
 	qAttr.allocated.Sub(taskReqResource)
 

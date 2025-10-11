@@ -105,7 +105,9 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	p.buildEventRecorder(ssn)
 	readyToSchedule := p.buildTotalResource(ssn)
 	if readyToSchedule {
-		p.buildQueueAttrs(ssn)
+		readyToSchedule = p.buildQueueAttrs(ssn)
+	}
+	if readyToSchedule {
 		p.buildQueueMetrics(ssn)
 	}
 

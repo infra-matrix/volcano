@@ -49,7 +49,7 @@ type queueAttr struct {
 }
 
 // buildQueueAttrs builds the attributes for all queues in the session.
-func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
+func (p *Plugin) buildQueueAttrs(ssn *framework.Session) bool {
 	// initialize totalGuarantee from all queues.
 	for _, queue := range ssn.Queues {
 		guarantee := p.newQueueResourceSupportingCard(queue.Queue, queue.Queue.Spec.Guarantee.Resource)
@@ -58,7 +58,9 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 
 	// build attributes for Queues.
 	for _, apiJob := range ssn.Jobs {
-		p.buildQueueAttrByJob(ssn, apiJob)
+		if !p.buildQueueAttrByJob(ssn, apiJob) {
+			return false
+		}
 	}
 
 	// update queue deserved and print queue info.
@@ -90,17 +92,19 @@ func (p *Plugin) buildQueueAttrs(ssn *framework.Session) {
 		}
 		return 1
 	})
+
+	return true
 }
 
 // buildQueueAttrByJob builds/updates the attributes of a queue by a job.
-func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo) {
+func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo) bool {
 	job, err := p.NewJobInfo(apiJob)
 	if err != nil {
 		klog.Errorf(
 			"Failed to create jobInfo for job <%s/%s>: %+v",
 			apiJob.Namespace, apiJob.Name, err,
 		)
-		return
+		return false
 	}
 	klog.V(5).Infof("Considering Job <%s/%s>.", job.Namespace, job.Name)
 	if _, found := p.queueOpts[job.Queue]; !found {
@@ -113,14 +117,20 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 	// calculate allocated and request resource for running and pending tasks in a job to queue.
 	qAttr := p.queueOpts[job.Queue]
 	for status, tasks := range job.TaskStatusIndex {
-		if api.AllocatedStatus(status) {
-			for _, t := range tasks {
-				qAttr.allocated.Add(t.Resreq)
-				qAttr.request.Add(t.Resreq)
+		for _, t := range tasks {
+			resReq, err := p.GetTaskRequestResources(t)
+			if err != nil {
+				klog.Errorf(
+					"Failed to create jobInfo for job <%s/%s>: %+v",
+					apiJob.Namespace, apiJob.Name, err,
+				)
+				return false
 			}
-		} else if status == api.Pending {
-			for _, t := range tasks {
-				qAttr.request.Add(t.Resreq)
+			if api.AllocatedStatus(status) {
+				qAttr.allocated.Add(resReq)
+				qAttr.request.Add(resReq)
+			} else if status == api.Pending {
+				qAttr.request.Add(resReq)
 			}
 		}
 	}
@@ -140,7 +150,7 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 	if job.PodGroup.Status.Phase == scheduling.PodGroupRunning &&
 		job.PodGroup.Spec.MinResources != nil &&
 		int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
-		inqueued := util.GetInqueueResource(job.JobInfo, job.Allocated)
+		inqueued := GetInqueueResource(job, job.allocated)
 		qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
 	}
 	qAttr.elastic.Add(job.GetElasticResources())
@@ -151,6 +161,8 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 		qAttr.request.String(),
 		qAttr.inqueue.String(),
 	)
+
+	return true
 }
 
 // newQueueAttr creates a new queueAttr from a QueueInfo object.
@@ -179,9 +191,6 @@ func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
 	if qAttr.capability.Memory <= 0 {
 		qAttr.capability.Memory = realCapability.Memory
 	}
-	if !QueueHasCardQuota(queue.Queue) {
-		qAttr.capability.ScalarResources = realCapability.ScalarResources
-	}
 	return qAttr
 }
 
@@ -191,19 +200,9 @@ func (p *Plugin) newQueueResourceSupportingCard(q *scheduling.Queue, rl v1.Resou
 		queueResource     = api.NewResource(rl)
 		queueCardResource = GetCardResourceFromAnnotations(q.Annotations, QueueAnnotationKeyCardQuota)
 	)
-	if queueResource.ScalarResources == nil {
-		queueResource.ScalarResources = make(map[v1.ResourceName]float64)
-	}
+	queueResource.ScalarResources = make(map[v1.ResourceName]float64)
 	for cardName, cardCountMilli := range queueCardResource.ScalarResources {
 		queueResource.ScalarResources[cardName] = cardCountMilli
-		// convert card name to real resource name, and add the card count to the resource.
-		// for example, convert "NVIDIA-H200" to "nvidia.com/gpu"
-		cardResourceName := p.cardNameToResourceName[cardName]
-		if cardResourceName == "" {
-			klog.Warningf("No resource name found for card <%s> in queue <%s>", cardName, q.Name)
-			continue
-		}
-		queueResource.ScalarResources[cardResourceName] += cardCountMilli
 	}
 	return queueResource
 }
