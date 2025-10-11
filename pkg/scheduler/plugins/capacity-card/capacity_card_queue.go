@@ -120,11 +120,11 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 		for _, t := range tasks {
 			resReq, err := p.GetTaskRequestResources(t)
 			if err != nil {
-				klog.Errorf(
+				klog.Warningf(
 					"Failed to get request resource for task <%s/%s> in job <%s/%s>: %+v",
 					t.Namespace, t.Name, apiJob.Namespace, apiJob.Name, err,
 				)
-				return false
+				continue
 			}
 			if api.AllocatedStatus(status) {
 				qAttr.allocated.Add(resReq)
@@ -185,12 +185,6 @@ func (p *Plugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
 	}
 	realCapability := api.ExceededPart(p.totalResource, p.totalGuarantee).Add(qAttr.guarantee)
 	qAttr.realCapability = realCapability
-	if qAttr.capability.MilliCPU <= 0 {
-		qAttr.capability.MilliCPU = realCapability.MilliCPU
-	}
-	if qAttr.capability.Memory <= 0 {
-		qAttr.capability.Memory = realCapability.Memory
-	}
 	return qAttr
 }
 

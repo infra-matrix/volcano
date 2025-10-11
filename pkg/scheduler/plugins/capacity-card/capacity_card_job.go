@@ -61,11 +61,11 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		if ti.Pod != nil {
 			resReq, err := p.GetTaskRequestResources(ti)
 			if err != nil {
-				klog.Errorf(
+				klog.Warningf(
 					"Failed to get request resource for task <%s/%s> in job <%s/%s>: %+v",
 					ti.Namespace, ti.Name, job.Namespace, job.Name, err,
 				)
-				return nil, err
+				continue
 			}
 
 			request.Add(resReq)
@@ -91,15 +91,19 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 func (p *Plugin) GetMinResources(ji *JobInfo) *api.Resource {
 	jobResource := api.EmptyResource()
 	if ji.preCheckCardResource != nil {
-		jobResource.Add(ji.preCheckCardResource)
+		jobResource.ScalarResources = ji.preCheckCardResource.ScalarResources
+		// add cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
+		if !p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobResource, ji.preCheckCardResource) {
+			jobResource.MilliCPU += ji.preCheckCardResource.MilliCPU
+			jobResource.Memory += ji.preCheckCardResource.Memory
+		}
 	}
 
 	jobMinReq := ji.JobInfo.GetMinResources()
-
 	// add scalar resources if cardUnlimitedCpuMemory not set or has no card resources
 	if (!p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobResource, jobMinReq)) && jobMinReq != nil {
-		jobResource.MilliCPU = jobMinReq.MilliCPU
-		jobResource.Memory = jobMinReq.Memory
+		jobResource.MilliCPU += jobMinReq.MilliCPU
+		jobResource.Memory += jobMinReq.Memory
 	}
 
 	return jobResource

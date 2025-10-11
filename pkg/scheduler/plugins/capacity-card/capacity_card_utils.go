@@ -28,7 +28,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
-	"volcano.sh/apis/pkg/apis/scheduling"
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
@@ -48,12 +47,6 @@ const (
 	// EventTypeInsufficientScalarQuota is insufficient scalar quota event type
 	EventTypeInsufficientScalarQuota = "InsufficientScalarQuota"
 )
-
-// QueueHasCardQuota checks whether the queue has card quota annotation.
-func QueueHasCardQuota(q *scheduling.Queue) bool {
-	_, ok := q.Annotations[QueueAnnotationKeyCardQuota]
-	return ok
-}
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.
 func GetCardResourceFromAnnotations(annotations map[string]string, key string) *api.Resource {
