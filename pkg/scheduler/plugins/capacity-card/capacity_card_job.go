@@ -89,7 +89,11 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 
 // GetMinResources return the min resources of PodGroup.
 func (p *Plugin) GetMinResources(ji *JobInfo) *api.Resource {
-	jobResource := ji.preCheckCardResource
+	jobResource := api.EmptyResource()
+	if ji.preCheckCardResource != nil {
+		jobResource.Add(ji.preCheckCardResource)
+	}
+
 	jobMinReq := ji.JobInfo.GetMinResources()
 
 	// add scalar resources if cardUnlimitedCpuMemory not set or has no card resources
