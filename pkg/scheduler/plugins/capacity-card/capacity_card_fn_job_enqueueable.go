@@ -72,7 +72,7 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 	}
 
 	// job enqueued
-	deductedResources := job.DeductSchGatedResources(job.GetMinResources())
+	deductedResources := job.DeductSchGatedResources(p.GetMinResources(job))
 	qAttr.inqueue.Add(deductedResources)
 	klog.V(5).Infof("Job <%s/%s> enqueued", job.Namespace, job.Name)
 	return util.Permit
@@ -81,7 +81,7 @@ func (p *Plugin) JobEnqueueableFn(ssn *framework.Session, jobInfo *api.JobInfo) 
 // isJobEnqueueable checks whether the job can be enqueued in the queue according to the queue's real capability.
 func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job *JobInfo) bool {
 	var (
-		jobReqResource  = job.GetMinResources()
+		jobReqResource  = p.GetMinResources(job)
 		queueCapability = qAttr.capability
 		totalToBeUsed   = jobReqResource.Clone().
 				Add(qAttr.allocated).
@@ -127,43 +127,41 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 		return true
 	}
 
-	// check cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
-	if !p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobReqResource) {
-		if jobReqResource.MilliCPU > 0 && totalToBeUsed.MilliCPU > queueCapability.MilliCPU {
-			klog.V(5).Infof(
-				"Job <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
-				job.Namespace, job.Name, qAttr.name,
-				jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
-			)
-			ssn.RecordPodGroupEvent(
-				job.PodGroup, v1.EventTypeWarning, EventTypeInsufficientCPUQuota,
-				fmt.Sprintf(
-					"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
-					qAttr.name, jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
-				),
-			)
-			return false
-		}
-		if jobReqResource.Memory > 0 && totalToBeUsed.Memory > queueCapability.Memory {
-			var (
-				jobReqResourceMi  = jobReqResource.Memory / 1024 / 1024
-				totalToBeUsedMi   = totalToBeUsed.Memory / 1024 / 1024
-				queueCapabilityMi = queueCapability.Memory / 1024 / 1024
-			)
-			klog.V(5).Infof(
-				"Job <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
-				job.Namespace, job.Name, qAttr.name,
-				jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
-			)
-			ssn.RecordPodGroupEvent(
-				job.PodGroup, v1.EventTypeWarning, EventTypeInsufficientMemoryQuota,
-				fmt.Sprintf(
-					"Queue %s has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
-					qAttr.name, jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
-				),
-			)
-			return false
-		}
+	// check cpu and memory
+	if jobReqResource.MilliCPU > 0 && totalToBeUsed.MilliCPU > queueCapability.MilliCPU {
+		klog.V(5).Infof(
+			"Job <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
+			job.Namespace, job.Name, qAttr.name,
+			jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
+		)
+		ssn.RecordPodGroupEvent(
+			job.PodGroup, v1.EventTypeWarning, EventTypeInsufficientCPUQuota,
+			fmt.Sprintf(
+				"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
+				qAttr.name, jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
+			),
+		)
+		return false
+	}
+	if jobReqResource.Memory > 0 && totalToBeUsed.Memory > queueCapability.Memory {
+		var (
+			jobReqResourceMi  = jobReqResource.Memory / 1024 / 1024
+			totalToBeUsedMi   = totalToBeUsed.Memory / 1024 / 1024
+			queueCapabilityMi = queueCapability.Memory / 1024 / 1024
+		)
+		klog.V(5).Infof(
+			"Job <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
+			job.Namespace, job.Name, qAttr.name,
+			jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
+		)
+		ssn.RecordPodGroupEvent(
+			job.PodGroup, v1.EventTypeWarning, EventTypeInsufficientMemoryQuota,
+			fmt.Sprintf(
+				"Queue %s has insufficient memory quota: requested <%v Mi>, total would be <%v Mi>, but capability is <%v Mi>",
+				qAttr.name, jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
+			),
+		)
+		return false
 	}
 
 	// if r.scalar is nil, whatever rr.scalar is, r is less or equal to rr

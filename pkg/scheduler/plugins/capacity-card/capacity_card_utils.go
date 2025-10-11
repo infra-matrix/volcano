@@ -136,34 +136,3 @@ func CheckSingleScalarResource(
 	result.Ok = true
 	return result
 }
-
-// GetInqueueResource returns reserved resource for running job whose part of pods have not been allocated resource.
-func GetInqueueResource(job *JobInfo, allocated *api.Resource) *api.Resource {
-	inqueue := &api.Resource{}
-	minResources := job.GetMinResources()
-
-	reservedCPU := float64(minResources.MilliCPU) - allocated.MilliCPU
-	if reservedCPU > 0 {
-		inqueue.MilliCPU = reservedCPU
-	}
-
-	reservedMemory := float64(minResources.Memory) - allocated.Memory
-	if reservedMemory > 0 {
-		inqueue.Memory = reservedMemory
-	}
-
-	for name, quantity := range minResources.ScalarResources {
-		if inqueue.ScalarResources == nil {
-			inqueue.ScalarResources = make(map[v1.ResourceName]float64)
-		}
-		if allocatedMount, ok := allocated.ScalarResources[name]; !ok {
-			inqueue.ScalarResources[name] = quantity
-		} else {
-			reservedScalarRes := quantity - allocatedMount
-			if reservedScalarRes > 0 {
-				inqueue.ScalarResources[name] = reservedScalarRes
-			}
-		}
-	}
-	return inqueue
-}
