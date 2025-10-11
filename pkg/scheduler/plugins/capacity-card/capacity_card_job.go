@@ -35,7 +35,9 @@ import (
 type JobInfo struct {
 	*api.JobInfo
 
-	allocated    *api.Resource
+	// allocated is the allocated cpu, memory and card resource to job. Ignore none card scalar resource.
+	allocated *api.Resource
+	// totalRequest is the total request cpu, memory and card resource to job. Ignore none card scalar resource.
 	totalRequest *api.Resource
 
 	// preCheckCardResource is the card resource retrieved from job annotation for pre-check purpose.
