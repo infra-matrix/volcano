@@ -185,12 +185,19 @@ func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 }
 
 // HasCardResource checks whether the job has card resource.
-func (p *Plugin) HasCardResource(resources *api.Resource) bool {
-	for cardName, resourceName := range p.cardNameToResourceName {
-		if _, ok := resources.ScalarResources[resourceName]; ok {
-			return true
-		}
-		if _, ok := resources.ScalarResources[cardName]; ok {
+// If job has card resource, return true.
+// If job has scalar resource, check whether it has card resource name.
+func (p *Plugin) HasCardResource(cardResource, scalarResource *api.Resource) bool {
+	if cardResource != nil && len(cardResource.ScalarResources) > 0 {
+		return true
+	}
+
+	if scalarResource == nil || len(scalarResource.ScalarResources) == 0 {
+		return false
+	}
+
+	for _, resourceName := range p.cardNameToResourceName {
+		if _, ok := scalarResource.ScalarResources[resourceName]; ok {
 			return true
 		}
 	}

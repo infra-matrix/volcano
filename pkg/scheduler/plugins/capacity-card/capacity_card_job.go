@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
@@ -37,8 +38,6 @@ type JobInfo struct {
 
 	// allocated is the allocated cpu, memory and card resource to job. Ignore none card scalar resource.
 	allocated *api.Resource
-	// totalRequest is the total request cpu, memory and card resource to job. Ignore none card scalar resource.
-	totalRequest *api.Resource
 
 	// preCheckCardResource is the card resource retrieved from job annotation for pre-check purpose.
 	// Pre-check will prevent pending pod created(working in JobEnqueueableFn) when queue has no enough card resource.
@@ -54,63 +53,61 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		JobAnnotationKeyCardRequest,
 	)
 
-	// job allocated card resource,
+	// job allocated cpu, memory and card resource to job. Ignore none card scalar resource.
 	allocated := api.EmptyResource()
-	if job.Allocated != nil {
-		allocated.MilliCPU = job.Allocated.MilliCPU
-		allocated.Memory = job.Allocated.Memory
-	}
-	// read task card request from task annotations.
-	realCardRequest := api.EmptyResource()
+	// job request cpu, memory and card resource to job. Ignore none card scalar resource.
+	request := api.EmptyResource()
 	for _, ti := range job.Tasks {
 		if ti.Pod != nil {
-			taskCardResource, err := p.getCardResourceFromTask(ti)
+			resReq, err := p.GetTaskRequestResources(ti)
 			if err != nil {
+				klog.Errorf(
+					"Failed to get request resource for task <%s/%s> in job <%s/%s>: %+v",
+					ti.Namespace, ti.Name, job.Namespace, job.Name, err,
+				)
 				return nil, err
 			}
-			realCardRequest.Add(taskCardResource)
 
+			request.Add(resReq)
 			if api.AllocatedStatus(ti.Status) {
-				allocated.Add(taskCardResource)
+				allocated.Add(resReq)
 			}
 		}
 	}
 
-	// job total request card resource
-	totalRequest := api.EmptyResource()
-	if job.TotalRequest != nil {
-		totalRequest.MilliCPU = job.TotalRequest.MilliCPU
-		totalRequest.Memory = job.TotalRequest.Memory
-	}
-	if realCardRequest.IsEmpty() {
-		totalRequest.Add(preCheckCardResource)
-	} else {
-		preCheckCardResource = realCardRequest
-		totalRequest.Add(realCardRequest)
+	// update preCheckCardResource with job request resource
+	if len(request.ScalarResources) > 0 {
+		preCheckCardResource.ScalarResources = request.ScalarResources
 	}
 
 	return &JobInfo{
 		JobInfo:              job,
-		totalRequest:         totalRequest,
 		allocated:            allocated,
 		preCheckCardResource: preCheckCardResource,
 	}, nil
 }
 
 // GetMinResources return the min resources of PodGroup.
-func (ji *JobInfo) GetMinResources() *api.Resource {
-	jobResource := ji.JobInfo.GetMinResources()
-	jobResource.ScalarResources = ji.preCheckCardResource.ScalarResources
+func (p *Plugin) GetMinResources(ji *JobInfo) *api.Resource {
+	jobResource := ji.preCheckCardResource
+	jobMinReq := ji.JobInfo.GetMinResources()
+
+	// add scalar resources if cardUnlimitedCpuMemory not set or has no card resources
+	if (!p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobResource, jobMinReq)) && jobMinReq != nil {
+		jobResource.MilliCPU = jobMinReq.MilliCPU
+		jobResource.Memory = jobMinReq.Memory
+	}
+
 	return jobResource
 }
 
 // GetElasticResources returns those partly resources in allocated which are more than its minResource
-func (ji *JobInfo) GetElasticResources() *api.Resource {
+func (p *Plugin) GetElasticResources(ji *JobInfo) *api.Resource {
 	if ji.allocated == nil {
 		return api.EmptyResource()
 	}
 	var (
-		minResource = ji.GetMinResources()
+		minResource = p.GetMinResources(ji)
 		elastic     = api.ExceededPart(ji.allocated, minResource)
 	)
 	return elastic
@@ -226,20 +223,18 @@ func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.
 	)
 }
 
-// GetTaskRequestResources get the task request resources
+// GetTaskRequestResources get the task request cpu, memory and card resource to job. Ignore none card scalar resource.
 func (p *Plugin) GetTaskRequestResources(task *api.TaskInfo) (*api.Resource, error) {
-	taskCardResource, err := p.getCardResourceFromTask(task)
+	totalRequest, err := p.getCardResourceFromTask(task)
 	if err != nil {
 		return nil, err
 	}
 
-	// job total request card resource
-	totalRequest := api.EmptyResource()
-	if task.Resreq != nil {
+	// add cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
+	if (!p.isCardUnlimitedCpuMemory || !p.HasCardResource(totalRequest, task.Resreq)) && task.Resreq != nil {
 		totalRequest.MilliCPU = task.Resreq.MilliCPU
 		totalRequest.Memory = task.Resreq.Memory
 	}
-	totalRequest.Add(taskCardResource)
 
 	return totalRequest, nil
 }

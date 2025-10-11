@@ -121,8 +121,8 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 			resReq, err := p.GetTaskRequestResources(t)
 			if err != nil {
 				klog.Errorf(
-					"Failed to create jobInfo for job <%s/%s>: %+v",
-					apiJob.Namespace, apiJob.Name, err,
+					"Failed to get request resource for task <%s/%s> in job <%s/%s>: %+v",
+					t.Namespace, t.Name, apiJob.Namespace, apiJob.Name, err,
 				)
 				return false
 			}
@@ -139,7 +139,7 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 	if job.PodGroup.Status.Phase == scheduling.PodGroupInqueue {
 		// deduct the resources of scheduling gated tasks in a job when calculating inqueued resources
 		// so that it will not block other jobs from being inqueued.
-		qAttr.inqueue.Add(job.DeductSchGatedResources(job.GetMinResources()))
+		qAttr.inqueue.Add(job.DeductSchGatedResources(p.GetMinResources(job)))
 	}
 
 	// calculate inqueue resource for running jobs
@@ -150,10 +150,10 @@ func (p *Plugin) buildQueueAttrByJob(ssn *framework.Session, apiJob *api.JobInfo
 	if job.PodGroup.Status.Phase == scheduling.PodGroupRunning &&
 		job.PodGroup.Spec.MinResources != nil &&
 		int32(util.CalculateAllocatedTaskNum(job.JobInfo)) >= job.PodGroup.Spec.MinMember {
-		inqueued := GetInqueueResource(job, job.allocated)
+		inqueued := p.GetInqueueResource(job, job.allocated)
 		qAttr.inqueue.Add(job.DeductSchGatedResources(inqueued))
 	}
-	qAttr.elastic.Add(job.GetElasticResources())
+	qAttr.elastic.Add(p.GetElasticResources(job))
 	klog.V(5).Infof(
 		"Built queue <%s> with job <%s/%s>: allocated <%s>, request <%s>, inqueue <%s>",
 		qAttr.name, job.Namespace, job.Name,
@@ -274,4 +274,35 @@ func updateQueueAttrShare(attr *queueAttr) {
 		res = max(res, helpers.Share(attr.allocated.Get(rn), attr.deserved.Get(rn)))
 	}
 	attr.share = res
+}
+
+// GetInqueueResource returns reserved resource for running job whose part of pods have not been allocated resource.
+func (p *Plugin) GetInqueueResource(job *JobInfo, allocated *api.Resource) *api.Resource {
+	inqueue := &api.Resource{}
+	minResources := p.GetMinResources(job)
+
+	reservedCPU := float64(minResources.MilliCPU) - allocated.MilliCPU
+	if reservedCPU > 0 {
+		inqueue.MilliCPU = reservedCPU
+	}
+
+	reservedMemory := float64(minResources.Memory) - allocated.Memory
+	if reservedMemory > 0 {
+		inqueue.Memory = reservedMemory
+	}
+
+	for name, quantity := range minResources.ScalarResources {
+		if inqueue.ScalarResources == nil {
+			inqueue.ScalarResources = make(map[v1.ResourceName]float64)
+		}
+		if allocatedMount, ok := allocated.ScalarResources[name]; !ok {
+			inqueue.ScalarResources[name] = quantity
+		} else {
+			reservedScalarRes := quantity - allocatedMount
+			if reservedScalarRes > 0 {
+				inqueue.ScalarResources[name] = reservedScalarRes
+			}
+		}
+	}
+	return inqueue
 }
