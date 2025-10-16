@@ -1,6 +1,7 @@
 package capacitycard
 
 import (
+	"fmt"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
@@ -1746,98 +1747,61 @@ func TestUpdateQueueAttrShare(t *testing.T) {
 func TestGetInqueueResource(t *testing.T) {
 	tests := []struct {
 		name                     string
-		job                      *JobInfo
-		allocated                *api.Resource
-		minResources             *api.Resource
+		minCPU                   string // MinResources CPU (e.g., "5" for 5 cores)
+		minMemory                string // MinResources Memory (e.g., "10Gi")
+		minCards                 map[string]int
+		allocatedCPU             float64                     // Allocated CPU in milli-cores
+		allocatedMemory          float64                     // Allocated Memory in bytes
+		allocatedCards           map[v1.ResourceName]float64 // Allocated card resources
 		isCardUnlimitedCpuMemory bool
 		expectedCPU              float64
 		expectedMemory           float64
 		expectedCards            map[v1.ResourceName]float64
 	}{
 		{
-			name: "job with allocated less than min resources - cardUnlimited=false",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "test-job",
-					Namespace: "default",
-				},
-			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,                   // 2 CPUs allocated
-				Memory:   4 * 1024 * 1024 * 1024, // 4Gi allocated
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-			},
+			name:                     "job with allocated less than min resources - cardUnlimited=false",
+			minCPU:                   "5",
+			minMemory:                "10Gi",
+			allocatedCPU:             2000,                   // 2 CPUs allocated
+			allocatedMemory:          4 * 1024 * 1024 * 1024, // 4Gi allocated
 			isCardUnlimitedCpuMemory: false,
 			expectedCPU:              3000,                   // 5 - 2 = 3 CPUs needed
 			expectedMemory:           6 * 1024 * 1024 * 1024, // 10 - 4 = 6Gi needed
 			expectedCards:            map[v1.ResourceName]float64{},
 		},
 		{
-			name: "job with allocated equal to min resources - cardUnlimited=false",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "test-job",
-					Namespace: "default",
-				},
-			},
-			allocated: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs allocated
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi allocated
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-			},
+			name:                     "job with allocated equal to min resources - cardUnlimited=false",
+			minCPU:                   "5",
+			minMemory:                "10Gi",
+			allocatedCPU:             5000,                    // 5 CPUs allocated
+			allocatedMemory:          10 * 1024 * 1024 * 1024, // 10Gi allocated
 			isCardUnlimitedCpuMemory: false,
 			expectedCPU:              0,
 			expectedMemory:           0,
 			expectedCards:            map[v1.ResourceName]float64{},
 		},
 		{
-			name: "job with allocated greater than min resources - cardUnlimited=false",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "test-job",
-					Namespace: "default",
-				},
-			},
-			allocated: &api.Resource{
-				MilliCPU: 6000,                    // 6 CPUs allocated
-				Memory:   12 * 1024 * 1024 * 1024, // 12Gi allocated
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-			},
+			name:                     "job with allocated greater than min resources - cardUnlimited=false",
+			minCPU:                   "5",
+			minMemory:                "10Gi",
+			allocatedCPU:             6000,                    // 6 CPUs allocated
+			allocatedMemory:          12 * 1024 * 1024 * 1024, // 12Gi allocated
 			isCardUnlimitedCpuMemory: false,
 			expectedCPU:              0, // no inqueue needed since allocated >= min
 			expectedMemory:           0,
 			expectedCards:            map[v1.ResourceName]float64{},
 		},
 		{
-			name: "job with card resources - cardUnlimited=false",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "gpu-job",
-					Namespace: "default",
-				},
+			name:      "job with card resources - cardUnlimited=false",
+			minCPU:    "5",
+			minMemory: "10Gi",
+			minCards: map[string]int{
+				"Tesla-V100": 2,
 			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,
-				Memory:   4 * 1024 * 1024 * 1024,
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 1000, // 1 GPU allocated
-				},
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPUs min
-				},
+			allocatedCPU:    2000,
+			allocatedMemory: 4 * 1024 * 1024 * 1024,
+			allocatedCards: map[v1.ResourceName]float64{
+				"Tesla-V100": 1000, // 1 GPU allocated
 			},
 			isCardUnlimitedCpuMemory: false,
 			expectedCPU:              3000,
@@ -1847,55 +1811,31 @@ func TestGetInqueueResource(t *testing.T) {
 			},
 		},
 		{
-			name: "job with card resources equal to min - cardUnlimited=false",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "gpu-job",
-					Namespace: "default",
-				},
+			name:      "job with card resources equal to min - cardUnlimited=false",
+			minCPU:    "5",
+			minMemory: "10Gi",
+			minCards: map[string]int{
+				"Tesla-V100": 2,
 			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,
-				Memory:   4 * 1024 * 1024 * 1024,
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPU allocated
-				},
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPUs min
-				},
+			allocatedCPU:    2000,
+			allocatedMemory: 4 * 1024 * 1024 * 1024,
+			allocatedCards: map[v1.ResourceName]float64{
+				"Tesla-V100": 2000, // 2 GPU allocated
 			},
 			isCardUnlimitedCpuMemory: false,
 			expectedCPU:              3000,
 			expectedMemory:           6 * 1024 * 1024 * 1024,
-			expectedCards: map[v1.ResourceName]float64{
-				"Tesla-V100": 0,
-			},
+			expectedCards:            map[v1.ResourceName]float64{},
 		},
 		{
 			name: "job with card resources - cardUnlimited=true",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "gpu-job",
-					Namespace: "default",
-				},
+			minCards: map[string]int{
+				"Tesla-V100": 2,
 			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,
-				Memory:   4 * 1024 * 1024 * 1024,
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 1000, // 1 GPU allocated
-				},
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPUs min
-				},
+			allocatedCPU:    2000,
+			allocatedMemory: 4 * 1024 * 1024 * 1024,
+			allocatedCards: map[v1.ResourceName]float64{
+				"Tesla-V100": 1000, // 1 GPU allocated
 			},
 			isCardUnlimitedCpuMemory: true,
 			expectedCPU:              0, // CPU/Memory should not be counted when cardUnlimited=true
@@ -1906,49 +1846,25 @@ func TestGetInqueueResource(t *testing.T) {
 		},
 		{
 			name: "job with card resources equal to min - cardUnlimited=true",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "gpu-job",
-					Namespace: "default",
-				},
+			minCards: map[string]int{
+				"Tesla-V100": 2,
 			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,
-				Memory:   4 * 1024 * 1024 * 1024,
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPU allocated
-				},
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-				ScalarResources: map[v1.ResourceName]float64{
-					"Tesla-V100": 2000, // 2 GPUs min
-				},
+			allocatedCPU:    2000,
+			allocatedMemory: 4 * 1024 * 1024 * 1024,
+			allocatedCards: map[v1.ResourceName]float64{
+				"Tesla-V100": 2000, // 2 GPU allocated
 			},
 			isCardUnlimitedCpuMemory: true,
 			expectedCPU:              0, // CPU/Memory should not be counted when cardUnlimited=true
 			expectedMemory:           0,
-			expectedCards: map[v1.ResourceName]float64{
-				"Tesla-V100": 0,
-			},
+			expectedCards:            map[v1.ResourceName]float64{},
 		},
 		{
-			name: "job without card resources - cardUnlimited=true",
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					Name:      "cpu-job",
-					Namespace: "default",
-				},
-			},
-			allocated: &api.Resource{
-				MilliCPU: 2000,
-				Memory:   4 * 1024 * 1024 * 1024,
-			},
-			minResources: &api.Resource{
-				MilliCPU: 5000,                    // 5 CPUs min
-				Memory:   10 * 1024 * 1024 * 1024, // 10Gi min
-			},
+			name:                     "job without card resources - cardUnlimited=true",
+			minCPU:                   "5",
+			minMemory:                "10Gi",
+			allocatedCPU:             2000,
+			allocatedMemory:          4 * 1024 * 1024 * 1024,
 			isCardUnlimitedCpuMemory: true,
 			expectedCPU:              3000,                   // CPU/Memory should be counted when no card resources
 			expectedMemory:           6 * 1024 * 1024 * 1024, // 10 - 4 = 6Gi needed
@@ -1963,20 +1879,73 @@ func TestGetInqueueResource(t *testing.T) {
 				isCardUnlimitedCpuMemory: tt.isCardUnlimitedCpuMemory,
 			}
 
-			// Initialize PodGroup with empty MinResources to avoid nil pointer
-			tt.job.JobInfo.PodGroup = &api.PodGroup{
-				PodGroup: scheduling.PodGroup{
-					Spec: scheduling.PodGroupSpec{
-						MinResources: &v1.ResourceList{},
+			// Build MinResources for PodGroup
+			minResourcesList := v1.ResourceList{}
+			if tt.minCPU != "" {
+				minResourcesList[v1.ResourceCPU] = resource.MustParse(tt.minCPU)
+			}
+			if tt.minMemory != "" {
+				minResourcesList[v1.ResourceMemory] = resource.MustParse(tt.minMemory)
+			}
+
+			// Build card request annotation
+			cardRequestAnnotation := ""
+			if len(tt.minCards) > 0 {
+				cardRequestJSON := fmt.Sprintf(`{"%s": %d}`, "Tesla-V100", tt.minCards["Tesla-V100"])
+				if len(tt.minCards) == 1 {
+					cardRequestAnnotation = cardRequestJSON
+				}
+			}
+
+			// Create JobInfo with proper structure
+			apiJob := &api.JobInfo{
+				Name:      "test-job",
+				Namespace: "default",
+				PodGroup: &api.PodGroup{
+					PodGroup: scheduling.PodGroup{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:        "test-job",
+							Namespace:   "default",
+							Annotations: map[string]string{},
+						},
+						Spec: scheduling.PodGroupSpec{
+							MinResources: &minResourcesList,
+						},
 					},
 				},
 			}
 
-			// Set the job's preCheckCardResource to simulate minResources
-			tt.job.preCheckCardResource = tt.minResources
+			if cardRequestAnnotation != "" {
+				apiJob.PodGroup.Annotations["volcano.sh/card.request"] = cardRequestAnnotation
+			}
 
-			// Call GetInqueueResource directly
-			inqueue := plugin.GetInqueueResource(tt.job, tt.allocated)
+			// Create JobInfo instance
+			job := &JobInfo{
+				JobInfo: apiJob,
+				preCheckCardResource: &api.Resource{
+					ScalarResources: map[v1.ResourceName]float64{},
+				},
+			}
+
+			// Set preCheckCardResource based on minCards
+			for cardName, qty := range tt.minCards {
+				job.preCheckCardResource.ScalarResources[v1.ResourceName(cardName)] = float64(qty * 1000)
+			}
+
+			// Create allocated resource
+			allocated := &api.Resource{
+				MilliCPU: tt.allocatedCPU,
+				Memory:   tt.allocatedMemory,
+			}
+			if len(tt.allocatedCards) > 0 {
+				allocated.ScalarResources = make(map[v1.ResourceName]float64)
+				for cardName, qty := range tt.allocatedCards {
+					allocated.ScalarResources[cardName] = qty
+				}
+			}
+
+			// Call GetInqueueResource
+			inqueue := plugin.GetInqueueResource(job, allocated)
 
 			// Compare with expected results
 			if inqueue.MilliCPU != tt.expectedCPU {

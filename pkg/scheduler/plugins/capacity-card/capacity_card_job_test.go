@@ -419,18 +419,14 @@ func TestGetMinResources(t *testing.T) {
 					},
 				},
 				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
 						"NVIDIA-A100": 2000,
 					},
 				},
 			},
-			expectedCPU:          0,
-			expectedMemory:       0,
 			expectedCardName:     "NVIDIA-A100",
 			expectedCardQuantity: 2000,
-			description:          "Should not include CPU/Memory when card resource exists and cardUnlimitedCpuMemory is enabled",
+			description:          "Should not include MinResources CPU/Memory when card resource exists and cardUnlimitedCpuMemory is enabled",
 		},
 		{
 			name: "job with card resource and cardUnlimitedCpuMemory disabled",
@@ -452,18 +448,16 @@ func TestGetMinResources(t *testing.T) {
 					},
 				},
 				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
 						"NVIDIA-A100": 2000,
 					},
 				},
 			},
-			expectedCPU:          5000,
-			expectedMemory:       5 * 1024 * 1024 * 1024,
+			expectedCPU:          4000,                   // MinResources CPU replaces preCheckCardResource CPU
+			expectedMemory:       4 * 1024 * 1024 * 1024, // MinResources Memory replaces preCheckCardResource Memory
 			expectedCardName:     "NVIDIA-A100",
 			expectedCardQuantity: 2000,
-			description:          "Should include CPU/Memory when cardUnlimitedCpuMemory is disabled",
+			description:          "Should replace with MinResources CPU/Memory when cardUnlimitedCpuMemory is disabled",
 		},
 		{
 			name: "job without card resource",

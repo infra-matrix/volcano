@@ -414,7 +414,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 		description string
 	}{
 		{
-			name: "job with sufficient resources",
+			name: "cpu and memory job with sufficient resources and isCardUnlimitedCpuMemory is false",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
 				isCardUnlimitedCpuMemory: false,
@@ -444,20 +444,349 @@ func TestIsJobEnqueueable(t *testing.T) {
 								Name:      "test-job",
 								Namespace: "default",
 							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    true,
-			description: "Job with sufficient resources should be enqueueable",
+			description: "Job with sufficient resources and isCardUnlimitedCpuMemory is false should be enqueueable",
 		},
 		{
-			name: "job with insufficient resources and inqueue resources",
+			name: "cpu and memory job with insufficient cpu and isCardUnlimitedCpuMemory is false",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: false,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: api.EmptyResource(),
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("9"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    false,
+			description: "Job with insufficient cpu and isCardUnlimitedCpuMemory is false should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with insufficient memory and isCardUnlimitedCpuMemory is false",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: false,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: api.EmptyResource(),
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("9Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    false,
+			description: "Job with insufficient memory and isCardUnlimitedCpuMemory is false should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with sufficient resources and isCardUnlimitedCpuMemory is true",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: true,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: api.EmptyResource(),
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    true,
+			description: "Job with sufficient resources and isCardUnlimitedCpuMemory is false should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with insufficient cpu and isCardUnlimitedCpuMemory is true",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: true,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: api.EmptyResource(),
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("9"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    false,
+			description: "Job with insufficient cpu and isCardUnlimitedCpuMemory is false should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with insufficient memory and isCardUnlimitedCpuMemory is true",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: true,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: api.EmptyResource(),
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("9Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    false,
+			description: "Job with insufficient memory and isCardUnlimitedCpuMemory is false should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with sufficient elastic resources",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: false,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: &api.Resource{
+					MilliCPU: 1000,
+				},
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("9"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    true,
+			description: "Job with sufficient elastic resources should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with sufficient elastic resources",
+			plugin: &Plugin{
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
+				isCardUnlimitedCpuMemory: false,
+			},
+			qAttr: &queueAttr{
+				queueID: "queue-1",
+				name:    "test-queue",
+				allocated: &api.Resource{
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+				},
+				inqueue: api.EmptyResource(),
+				elastic: &api.Resource{
+					Memory: 1 * 1024 * 1024 * 1024,
+				},
+				capability: &api.Resource{
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
+				},
+			},
+			job: &JobInfo{
+				JobInfo: &api.JobInfo{
+					UID:       "job-1",
+					Name:      "test-job",
+					Namespace: "default",
+					PodGroup: &api.PodGroup{
+						PodGroup: scheduling.PodGroup{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      "test-job",
+								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("9Gi"),
+								},
+							},
+						},
+						Version: api.PodGroupVersionV1Beta1,
+					},
+				},
+				preCheckCardResource: &api.Resource{},
+			},
+			expected:    true,
+			description: "Job with sufficient elastic resources should be enqueueable",
+		},
+		{
+			name: "cpu and memory job with insufficient inqueue cpu",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
 				isCardUnlimitedCpuMemory: false,
@@ -470,8 +799,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 					Memory:   2 * 1024 * 1024 * 1024,
 				},
 				inqueue: &api.Resource{
-					MilliCPU: 8000,
-					Memory:   8 * 1024 * 1024 * 1024,
+					MilliCPU: 1000,
 				},
 				elastic: api.EmptyResource(),
 				capability: &api.Resource{
@@ -490,20 +818,23 @@ func TestIsJobEnqueueable(t *testing.T) {
 								Name:      "test-job",
 								Namespace: "default",
 							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    false,
-			description: "Job with insufficient resources and inqueue resources should not be enqueueable",
+			description: "Job with insufficient inqueue cpu should be rejected",
 		},
 		{
-			name: "job with sufficient resources and inqueue resources",
+			name: "cpu and memory job with insufficient inqueue memory",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
 				isCardUnlimitedCpuMemory: false,
@@ -516,8 +847,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 					Memory:   2 * 1024 * 1024 * 1024,
 				},
 				inqueue: &api.Resource{
-					MilliCPU: 7000,
-					Memory:   7 * 1024 * 1024 * 1024,
+					Memory: 1 * 1024 * 1024 * 1024,
 				},
 				elastic: api.EmptyResource(),
 				capability: &api.Resource{
@@ -536,109 +866,20 @@ func TestIsJobEnqueueable(t *testing.T) {
 								Name:      "test-job",
 								Namespace: "default",
 							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
-			},
-			expected:    true,
-			description: "Job with sufficient resources should not be enqueueable",
-		},
-		{
-			name: "job with sufficient resources and elastic resources",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-1",
-				name:    "test-queue",
-				allocated: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-				inqueue: api.EmptyResource(),
-				elastic: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-1",
-					Name:      "test-job",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "test-job",
-								Namespace: "default",
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("8"),
+									v1.ResourceMemory: resource.MustParse("8Gi"),
+								},
 							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
-			},
-			expected:    true,
-			description: "Job with sufficient resources and elastic resources should be enqueueable",
-		},
-		{
-			name: "job with insufficient resources and elastic resources",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-1",
-				name:    "test-queue",
-				allocated: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-				inqueue: api.EmptyResource(),
-				elastic: &api.Resource{
-					MilliCPU: 500,
-					Memory:   0.5 * 1024 * 1024 * 1024,
-				},
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-1",
-					Name:      "test-job",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "test-job",
-								Namespace: "default",
-							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    false,
-			description: "Job with insufficient resources and elastic resources should be enqueueable",
+			description: "Job with insufficient inqueue cpu should be rejected",
 		},
 		{
 			name: "job with nil resource request",
@@ -681,98 +922,6 @@ func TestIsJobEnqueueable(t *testing.T) {
 			description: "Job with nil request should be allowed if allocated is within capability",
 		},
 		{
-			name: "insufficient CPU quota",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-3",
-				name:    "cpu-limited-queue",
-				allocated: &api.Resource{
-					MilliCPU: 8000,
-					Memory:   5 * 1024 * 1024 * 1024,
-				},
-				inqueue: api.EmptyResource(),
-				elastic: api.EmptyResource(),
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   20 * 1024 * 1024 * 1024,
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-3",
-					Name:      "cpu-heavy-job",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "cpu-heavy-job",
-								Namespace: "default",
-							},
-							Spec: scheduling.PodGroupSpec{
-								MinResources: &v1.ResourceList{
-									v1.ResourceCPU:    resource.MustParse("3"),
-									v1.ResourceMemory: resource.MustParse("2Gi"),
-								},
-							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: nil,
-			},
-			expected:    false,
-			description: "Should reject job when CPU quota is insufficient",
-		},
-		{
-			name: "insufficient Memory quota",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-4",
-				name:    "memory-limited-queue",
-				allocated: &api.Resource{
-					MilliCPU: 2000,
-					Memory:   8 * 1024 * 1024 * 1024,
-				},
-				inqueue: api.EmptyResource(),
-				elastic: api.EmptyResource(),
-				capability: &api.Resource{
-					MilliCPU: 20000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-4",
-					Name:      "memory-heavy-job",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "memory-heavy-job",
-								Namespace: "default",
-							},
-							Spec: scheduling.PodGroupSpec{
-								MinResources: &v1.ResourceList{
-									v1.ResourceCPU:    resource.MustParse("1"),
-									v1.ResourceMemory: resource.MustParse("3Gi"),
-								},
-							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: nil,
-			},
-			expected:    false,
-			description: "Should reject job when memory quota is insufficient",
-		},
-		{
 			name: "job with no resource quota used - should allow",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
@@ -804,10 +953,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    true,
 			description: "Should allow when queue has no allocated resources",
@@ -822,8 +968,8 @@ func TestIsJobEnqueueable(t *testing.T) {
 				queueID: "queue-6",
 				name:    "zero-cpu-queue",
 				allocated: &api.Resource{
-					MilliCPU: 9500,
-					Memory:   2 * 1024 * 1024 * 1024,
+					MilliCPU: 10000,
+					Memory:   10 * 1024 * 1024 * 1024,
 				},
 				inqueue: api.EmptyResource(),
 				elastic: api.EmptyResource(),
@@ -847,62 +993,16 @@ func TestIsJobEnqueueable(t *testing.T) {
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 0,
-					Memory:   1 * 1024 * 1024 * 1024,
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    true,
 			description: "Zero CPU request should skip CPU quota check",
 		},
 		{
-			name: "zero memory request should not trigger memory check",
+			name: "sufficient scalar quota",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-7",
-				name:    "zero-memory-queue",
-				allocated: &api.Resource{
-					MilliCPU: 2000,
-					Memory:   9 * 1024 * 1024 * 1024,
-				},
-				inqueue: api.EmptyResource(),
-				elastic: api.EmptyResource(),
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-7",
-					Name:      "zero-memory-job",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "zero-memory-job",
-								Namespace: "default",
-							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   0,
-				},
-			},
-			expected:    true,
-			description: "Zero memory request should skip memory quota check",
-		},
-		{
-			name: "insufficient scalar quota",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
+				isCardUnlimitedCpuMemory: true,
 			},
 			qAttr: &queueAttr{
 				queueID: "queue-8",
@@ -911,7 +1011,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 					MilliCPU: 2000,
 					Memory:   2 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 3500,
+						"NVIDIA-A100": 3000,
 					},
 				},
 				inqueue: api.EmptyResource(),
@@ -935,67 +1035,19 @@ func TestIsJobEnqueueable(t *testing.T) {
 								Name:      "gpu-job",
 								Namespace: "default",
 							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 1000,
-					},
-				},
-			},
-			expected:    false,
-			description: "Should reject job when scalar quota is insufficient",
-		},
-		{
-			name: "sufficient scalar quota",
-			plugin: &Plugin{
-				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-9",
-				name:    "gpu-queue",
-				allocated: &api.Resource{
-					MilliCPU: 2000,
-					Memory:   2 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 2000,
-					},
-				},
-				inqueue: api.EmptyResource(),
-				elastic: api.EmptyResource(),
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 8000,
-					},
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-9",
-					Name:      "gpu-job-ok",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "gpu-job-ok",
-								Namespace: "default",
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("10"),
+									v1.ResourceMemory: resource.MustParse("10Gi"),
+								},
 							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
 				preCheckCardResource: &api.Resource{
-					MilliCPU: 2000,
-					Memory:   2 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 4000,
+						"NVIDIA-A100": 1000,
 					},
 				},
 			},
@@ -1003,21 +1055,19 @@ func TestIsJobEnqueueable(t *testing.T) {
 			description: "Should allow job when scalar quota is sufficient",
 		},
 		{
-			name: "sufficient scalar quota and card unlimited cpu memory enabled",
+			name: "insufficient scalar quota",
 			plugin: &Plugin{
-				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
-					"NVIDIA-A100": "NVIDIA-A100",
-				},
+				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
 				isCardUnlimitedCpuMemory: true,
 			},
 			qAttr: &queueAttr{
-				queueID: "queue-9",
-				name:    "gpu-queue",
+				queueID: "queue-8",
+				name:    "gpu-limited-queue",
 				allocated: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 2000,
+						"NVIDIA-A100": 3000,
 					},
 				},
 				inqueue: api.EmptyResource(),
@@ -1026,133 +1076,95 @@ func TestIsJobEnqueueable(t *testing.T) {
 					MilliCPU: 10000,
 					Memory:   10 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 8000,
+						"NVIDIA-A100": 4000,
 					},
 				},
 			},
 			job: &JobInfo{
 				JobInfo: &api.JobInfo{
-					UID:       "job-9",
-					Name:      "gpu-job-ok",
+					UID:       "job-8",
+					Name:      "gpu-job",
 					Namespace: "default",
 					PodGroup: &api.PodGroup{
 						PodGroup: scheduling.PodGroup{
 							ObjectMeta: metav1.ObjectMeta{
-								Name:      "gpu-job-ok",
+								Name:      "gpu-job",
 								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("10"),
+									v1.ResourceMemory: resource.MustParse("10Gi"),
+								},
 							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
 				preCheckCardResource: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 4000,
-					},
-				},
-			},
-			expected:    true,
-			description: "Should allow job when scalar quota is sufficient and card unlimited cpu memory is enabled",
-		},
-		{
-			name: "sufficient scalar quota and card unlimited cpu memory disabled",
-			plugin: &Plugin{
-				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
-					"NVIDIA-A100": "NVIDIA-A100",
-				},
-				isCardUnlimitedCpuMemory: false,
-			},
-			qAttr: &queueAttr{
-				queueID: "queue-9",
-				name:    "gpu-queue",
-				allocated: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
 					ScalarResources: map[v1.ResourceName]float64{
 						"NVIDIA-A100": 2000,
-					},
-				},
-				inqueue: api.EmptyResource(),
-				elastic: api.EmptyResource(),
-				capability: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 8000,
-					},
-				},
-			},
-			job: &JobInfo{
-				JobInfo: &api.JobInfo{
-					UID:       "job-9",
-					Name:      "gpu-job-ok",
-					Namespace: "default",
-					PodGroup: &api.PodGroup{
-						PodGroup: scheduling.PodGroup{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      "gpu-job-ok",
-								Namespace: "default",
-							},
-						},
-						Version: api.PodGroupVersionV1Beta1,
-					},
-				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 10000,
-					Memory:   10 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						"NVIDIA-A100": 4000,
 					},
 				},
 			},
 			expected:    false,
-			description: "Should not allow job when scalar quota is sufficient and card unlimited cpu memory is disabled",
+			description: "Should reject job when scalar quota is insufficient",
 		},
 		{
-			name: "totalToBeUsed ScalarResources is nil - should allow",
+			name: "insufficient memory and cpu quota and isCardUnlimitedCpuMemory is false",
 			plugin: &Plugin{
 				cardNameToResourceName:   map[v1.ResourceName]v1.ResourceName{},
 				isCardUnlimitedCpuMemory: false,
 			},
 			qAttr: &queueAttr{
-				queueID: "queue-10",
-				name:    "no-scalar-queue",
+				queueID: "queue-8",
+				name:    "gpu-limited-queue",
 				allocated: &api.Resource{
-					MilliCPU:        2000,
-					Memory:          2 * 1024 * 1024 * 1024,
-					ScalarResources: nil,
+					MilliCPU: 2000,
+					Memory:   2 * 1024 * 1024 * 1024,
+					ScalarResources: map[v1.ResourceName]float64{
+						"NVIDIA-A100": 3000,
+					},
 				},
 				inqueue: api.EmptyResource(),
 				elastic: api.EmptyResource(),
 				capability: &api.Resource{
 					MilliCPU: 10000,
 					Memory:   10 * 1024 * 1024 * 1024,
+					ScalarResources: map[v1.ResourceName]float64{
+						"NVIDIA-A100": 4000,
+					},
 				},
 			},
 			job: &JobInfo{
 				JobInfo: &api.JobInfo{
-					UID:       "job-10",
-					Name:      "no-scalar-job",
+					UID:       "job-8",
+					Name:      "gpu-job",
 					Namespace: "default",
 					PodGroup: &api.PodGroup{
 						PodGroup: scheduling.PodGroup{
 							ObjectMeta: metav1.ObjectMeta{
-								Name:      "no-scalar-job",
+								Name:      "gpu-job",
 								Namespace: "default",
+							},
+							Spec: scheduling.PodGroupSpec{
+								MinResources: &v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("10"),
+									v1.ResourceMemory: resource.MustParse("10Gi"),
+								},
 							},
 						},
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
 				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
+					ScalarResources: map[v1.ResourceName]float64{
+						"NVIDIA-A100": 1000,
+					},
 				},
 			},
-			expected:    true,
-			description: "Should allow when totalToBeUsed has no scalar resources",
+			expected:    false,
+			description: "Should reject job when memory quota is insufficient",
 		},
 		{
 			name: "ignored scalar resource (pods) should not be checked",
@@ -1195,13 +1207,7 @@ func TestIsJobEnqueueable(t *testing.T) {
 						Version: api.PodGroupVersionV1Beta1,
 					},
 				},
-				preCheckCardResource: &api.Resource{
-					MilliCPU: 1000,
-					Memory:   1 * 1024 * 1024 * 1024,
-					ScalarResources: map[v1.ResourceName]float64{
-						v1.ResourcePods: 10, // Request 10 pods
-					},
-				},
+				preCheckCardResource: &api.Resource{},
 			},
 			expected:    true,
 			description: "Pods resource should be ignored and not block enqueue even when quota is exceeded",

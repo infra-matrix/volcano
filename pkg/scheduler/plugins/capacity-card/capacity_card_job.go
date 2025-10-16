@@ -91,19 +91,15 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 func (p *Plugin) GetMinResources(ji *JobInfo) *api.Resource {
 	jobResource := api.EmptyResource()
 	if ji.preCheckCardResource != nil {
-		jobResource.ScalarResources = ji.preCheckCardResource.ScalarResources
-		// add cpu and memory if cardUnlimitedCpuMemory not set or has no card resources
-		if !p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobResource, ji.preCheckCardResource) {
-			jobResource.MilliCPU += ji.preCheckCardResource.MilliCPU
-			jobResource.Memory += ji.preCheckCardResource.Memory
-		}
+		jobResource.Add(ji.preCheckCardResource)
 	}
 
 	jobMinReq := ji.JobInfo.GetMinResources()
+
 	// add scalar resources if cardUnlimitedCpuMemory not set or has no card resources
 	if (!p.isCardUnlimitedCpuMemory || !p.HasCardResource(jobResource, jobMinReq)) && jobMinReq != nil {
-		jobResource.MilliCPU += jobMinReq.MilliCPU
-		jobResource.Memory += jobMinReq.Memory
+		jobResource.MilliCPU = jobMinReq.MilliCPU
+		jobResource.Memory = jobMinReq.Memory
 	}
 
 	return jobResource
