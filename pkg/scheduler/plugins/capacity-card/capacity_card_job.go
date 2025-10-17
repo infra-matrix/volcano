@@ -61,11 +61,11 @@ func (p *Plugin) NewJobInfo(job *api.JobInfo) (*JobInfo, error) {
 		if ti.Pod != nil {
 			resReq, err := p.GetTaskRequestResources(ti)
 			if err != nil {
-				klog.Errorf(
+				klog.Warningf(
 					"Failed to get request resource for task <%s/%s> in job <%s/%s>: %+v",
 					ti.Namespace, ti.Name, job.Namespace, job.Name, err,
 				)
-				return nil, err
+				continue
 			}
 
 			request.Add(resReq)
