@@ -99,7 +99,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 
 	if jobReqResource == nil {
 		if ok := totalToBeUsed.LessEqual(queueCapability, api.Zero); !ok {
-			klog.V(5).Infof(
+			klog.Warningf(
 				"Job <%s/%s>, Queue <%s> capability <%s> is empty, deny it to enqueue",
 				job.Namespace, job.Name, qAttr.name, queueCapability.String(),
 			)
@@ -129,7 +129,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 
 	// check cpu and memory
 	if jobReqResource.MilliCPU > 0 && totalToBeUsed.MilliCPU > queueCapability.MilliCPU {
-		klog.V(5).Infof(
+		klog.Warningf(
 			"Job <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
 			job.Namespace, job.Name, qAttr.name,
 			jobReqResource.MilliCPU, totalToBeUsed.MilliCPU, queueCapability.MilliCPU,
@@ -149,7 +149,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 			totalToBeUsedMi   = totalToBeUsed.Memory / 1024 / 1024
 			queueCapabilityMi = queueCapability.Memory / 1024 / 1024
 		)
-		klog.V(5).Infof(
+		klog.Warningf(
 			"Job <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
 			job.Namespace, job.Name, qAttr.name,
 			jobReqResourceMi, totalToBeUsedMi, queueCapabilityMi,
@@ -179,7 +179,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 		if checkResult.Ok {
 			continue
 		}
-		klog.V(2).Infof(
+		klog.Warningf(
 			"Job <%s/%s>, Queue <%s> has no enough %s, request <%v>, total would be <%v>, capability <%v>",
 			job.Namespace, job.Name, qAttr.name,
 			checkResult.NoEnoughScalarName,

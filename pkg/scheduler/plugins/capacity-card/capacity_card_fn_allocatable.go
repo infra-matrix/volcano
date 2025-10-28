@@ -74,7 +74,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 	}
 	if taskReqResource == nil {
 		if ok := totalToBeAllocated.LessEqual(queueCapability, api.Zero); !ok {
-			klog.V(5).Infof(
+			klog.Warningf(
 				"Task <%s/%s>, Queue <%s> capability <%s> is empty, deny it to allocate",
 				ti.Namespace, ti.Name, qAttr.name, queueCapability.String(),
 			)
@@ -96,7 +96,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 
 	// check cpu and memory
 	if taskReqResource.MilliCPU > 0 && totalToBeAllocated.MilliCPU > queueCapability.MilliCPU {
-		klog.V(2).Infof(
+		klog.Warningf(
 			"Task <%s/%s>, Queue <%s> has no enough CPU, request <%v>, total would be <%v>, capability <%v>",
 			ti.Namespace, ti.Name, qAttr.name,
 			taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
@@ -108,10 +108,6 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 				qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
 			)
 		}
-		klog.V(3).Infof(
-			"Queue <%s> has insufficient CPU quota: requested <%v>, total would be <%v>, but capability is <%v>",
-			qAttr.name, taskReqResource.MilliCPU, totalToBeAllocated.MilliCPU, queueCapability.MilliCPU,
-		)
 		return false
 	}
 	if taskReqResource.Memory > 0 && totalToBeAllocated.Memory > queueCapability.Memory {
@@ -120,7 +116,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			totalToBeAllocatedMi = totalToBeAllocated.Memory / 1024 / 1024
 			queueCapabilityMi    = queueCapability.Memory / 1024 / 1024
 		)
-		klog.V(2).Infof(
+		klog.Warningf(
 			"Task <%s/%s>, Queue <%s> has no enough Memory, request <%v Mi>, total would be <%v Mi>, capability <%v Mi>",
 			ti.Namespace, ti.Name, qAttr.name, taskReqResourceMi, totalToBeAllocatedMi, queueCapabilityMi,
 		)
@@ -149,7 +145,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 		if checkResult.Ok {
 			continue
 		}
-		klog.V(2).Infof(
+		klog.Warningf(
 			"Task <%s/%s>, Queue <%s> has no enough %s, request <%v>, total would be <%v>, capability <%v>",
 			ti.Namespace, ti.Name, qAttr.name,
 			checkResult.NoEnoughScalarName,
