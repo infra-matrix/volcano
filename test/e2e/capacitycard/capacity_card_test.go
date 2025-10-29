@@ -34,43 +34,43 @@ import (
 	e2eutil "volcano.sh/volcano/test/e2e/util"
 )
 
-// 生成随机后缀，确保资源名称唯一性
+// Generate a random suffix to ensure resource name uniqueness
 func generateRandomSuffix() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return fmt.Sprintf("%d", r.Intn(10000))
 }
 
-// 全局常量定义
+// Global constant definitions
 const (
-	// 集群中实际的卡片类型
+	// Actual card types in the cluster
 	CardTypeTeslaK80 = "Tesla-K80"
 	CardTypeRTX4090  = "NVIDIA-GeForce-RTX-4090"
 	CardTypeH800     = "NVIDIA-H800"
-	// 轮询配置
+	// Polling configuration
 	PollInterval       = 500 * time.Millisecond
 	QueueReadyTimeout  = 30 * time.Second
 	JobProcessTimeout  = 60 * time.Second
 	CleanupGracePeriod = 10 * time.Second
 )
 
-// 初始化随机数生成器
+// Initialize random number generator
 var _ = BeforeSuite(func() {
 	rand.Seed(time.Now().UnixNano())
 })
 
 var _ = Describe("Capacity Card E2E Test", func() {
 	Context("Capacity Card - Basic", func() {
-		// 测试1: 基本队列容量管理测试
+		// Test 1: Basic queue capacity management test
 		It("Queue Capacity Management", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试1: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 1: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("capacity-card-test-1-%s", randomSuffix),
 			})
-			fmt.Printf("测试1: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 1: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带卡片配额的队列
+			// Create queue with card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("capacity-test-queue-%s", randomSuffix),
 				Weight: 10,
@@ -83,13 +83,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试1: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 1: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试1: 队列 %s 创建成功，%s卡片配额为4\n", queueSpec.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 1: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeTeslaK80)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试1: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 1: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -97,29 +97,29 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试1: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 1: Queue %s status is now open\n", queueSpec.Name)
 
-			// 使用e2eutil清理队列
+			// Clean up queue using e2eutil
 			defer func() {
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("测试1: 队列 %s 已清理\n", queueSpec.Name)
+				fmt.Printf("Test 1: Queue %s cleaned up\n", queueSpec.Name)
 			}()
 		})
 	})
 
 	Context("Capacity Card - VCJob", func() {
-		// 测试2: 作业入队性检查 - 成功案例
+		// Test 2: Job enqueueable check - success case
 		It("Job Enqueueable Check - Success", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试2: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 2: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("capacity-card-test-2-%s", randomSuffix),
 			})
-			fmt.Printf("测试2: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 2: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带卡片配额的队列
+			// Create queue with card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("enqueue-test-queue-%s", randomSuffix),
 				Weight: 10,
@@ -132,13 +132,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试2: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 2: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试2: 队列 %s 创建成功\n", queueSpec.Name)
+			fmt.Printf("Test 2: Queue %s created successfully\n", queueSpec.Name)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试2: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 2: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -146,10 +146,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试2: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 2: Queue %s status is now open\n", queueSpec.Name)
 
-			// 创建一个带卡片请求的作业
+			// Create a job with card request
 			jobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("enqueue-success-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -173,45 +173,45 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 添加作业卡片请求注解到JobSpec
+			// Add job card request annotation to JobSpec
 			jobSpec.Annotations = map[string]string{
 				"volcano.sh/card.request": fmt.Sprintf(`{"%s": 2}`, CardTypeTeslaK80),
 			}
 
-			// 直接创建作业
-			fmt.Printf("测试2: 开始创建作业 %s\n", jobSpec.Name)
+			// Create job directly
+			fmt.Printf("Test 2: Starting to create job %s\n", jobSpec.Name)
 			job := e2eutil.CreateJob(ctx, jobSpec)
-			fmt.Printf("测试2: 作业 %s 创建成功\n", job.Name)
+			fmt.Printf("Test 2: Job %s created successfully\n", job.Name)
 
-			// 等待作业就绪
-			fmt.Printf("测试2: 等待作业就绪\n")
+			// Wait for job to be ready
+			fmt.Printf("Test 2: Waiting for job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "作业未能在超时时间内就绪")
-			fmt.Printf("测试2: 作业 %s 已就绪\n", job.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 2: Job %s is now ready\n", job.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete job
 				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("测试2: 作业 %s 已清理\n", job.Name)
+				fmt.Printf("Test 2: Job %s cleaned up\n", job.Name)
 
-				// 使用e2eutil清理队列
+				// Clean up queue using e2eutil
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("测试2: 队列 %s 已清理\n", queueSpec.Name)
+				fmt.Printf("Test 2: Queue %s cleaned up\n", queueSpec.Name)
 			}()
 		})
 
-		// 测试3: 任务卡片资源分配测试
+		// Test 3: Task card resource allocation test
 		It("Task Card Resource Allocation", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试3: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 3: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("capacity-card-test-3-%s", randomSuffix),
 			})
-			fmt.Printf("测试3: 测试上下文初始化完成，命名空间 %s 创建成功\n", ctx.Namespace)
+			fmt.Printf("Test 3: Test context initialized, namespace %s created successfully\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带卡片配额的队列
+			// Create queue with card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("allocation-test-queue-%s", randomSuffix),
 				Weight: 10,
@@ -224,13 +224,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试3: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 3: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试3: 队列 %s 创建成功\n", queueSpec.Name)
+			fmt.Printf("Test 3: Queue %s created successfully\n", queueSpec.Name)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试3: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 3: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -238,10 +238,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试3: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 3: Queue %s status is now open\n", queueSpec.Name)
 
-			// 创建一个带任务级卡片名称请求的作业，将卡片名称注解设置到TaskSpec
+			// Create a job with task-level card name request, set card name annotation to TaskSpec
 			taskSpecs := []e2eutil.TaskSpec{
 				{
 					Name: "card-task",
@@ -271,40 +271,40 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				Tasks: taskSpecs,
 			}
 
-			// 直接创建作业
-			fmt.Printf("测试3: 开始创建作业 %s\n", jobSpec.Name)
+			// Create job directly
+			fmt.Printf("Test 3: Starting to create job %s\n", jobSpec.Name)
 			job := e2eutil.CreateJob(ctx, jobSpec)
-			fmt.Printf("测试3: 作业 %s 创建成功\n", job.Name)
+			fmt.Printf("Test 3: Job %s created successfully\n", job.Name)
 
-			// 等待作业就绪
-			fmt.Printf("测试3: 等待作业就绪\n")
+			// Wait for job to be ready
+			fmt.Printf("Test 3: Waiting for job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "作业未能在超时时间内就绪")
-			fmt.Printf("测试3: 作业 %s 已就绪\n", job.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 3: Job %s is now ready\n", job.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete job
 				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("测试3: 作业 %s 已清理\n", job.Name)
+				fmt.Printf("Test 3: Job %s cleaned up\n", job.Name)
 
-				// 使用e2eutil清理队列
+				// Clean up queue using e2eutil
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("测试3: 队列 %s 已清理\n", queueSpec.Name)
+				fmt.Printf("Test 3: Queue %s cleaned up\n", queueSpec.Name)
 			}()
 		})
 
-		// 测试4: 卡片资源超出配额测试
+		// Test 4: Card resource quota exceeded test
 		It("Card Resource Quota Exceeded", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试4: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 4: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("capacity-card-test-4-%s", randomSuffix),
 			})
-			fmt.Printf("测试4: 测试上下文初始化完成，命名空间 %s 创建成功\n", ctx.Namespace)
+			fmt.Printf("Test 4: Test context initialized, namespace %s created successfully\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带有限卡片配额的队列
+			// Create queue with limited card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("quota-limit-queue-%s", randomSuffix),
 				Weight: 10,
@@ -317,13 +317,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试4: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 4: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试4: 队列 %s 创建成功，%s卡片配额为2\n", queueSpec.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 4: Queue %s created successfully, %s card quota is 2\n", queueSpec.Name, CardTypeTeslaK80)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试4: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 4: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -331,10 +331,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试4: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 4: Queue %s status is now open\n", queueSpec.Name)
 
-			// 创建第一个作业，使用部分卡片配额
+			// Create first job, using part of card quota
 			job1Spec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("first-quota-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -364,12 +364,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			fmt.Printf("测试4: 开始创建第一个作业 %s\n", job1Spec.Name)
+			fmt.Printf("Test 4: Starting to create first job %s\n", job1Spec.Name)
 			job1 := e2eutil.CreateJob(ctx, job1Spec)
-			fmt.Printf("测试4: 作业1 %s 创建成功，请求%s卡片资源为1\n", job1.Name, CardTypeTeslaK80)
-			fmt.Printf("测试4: 作业1 %s 验证成功\n", job1.Name)
+			fmt.Printf("Test 4: Job 1 %s created successfully, requesting %s card resource as 1\n", job1.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 4: Job 1 %s validated successfully\n", job1.Name)
 
-			// 创建第二个作业，使用剩余卡片配额
+			// Create second job, using remaining card quota
 			job2Spec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("second-quota-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -399,12 +399,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			fmt.Printf("测试4: 开始创建第二个作业 %s\n", job2Spec.Name)
+			fmt.Printf("Test 4: Starting to create second job %s\n", job2Spec.Name)
 			job2 := e2eutil.CreateJob(ctx, job2Spec)
-			fmt.Printf("测试4: 作业2 %s 创建成功，请求%s卡片资源为1\n", job2.Name, CardTypeTeslaK80)
-			fmt.Printf("测试4: 作业2 %s 验证成功\n", job2.Name)
+			fmt.Printf("Test 4: Job 2 %s created successfully, requesting %s card resource as 1\n", job2.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 4: Job 2 %s validated successfully\n", job2.Name)
 
-			// 创建第三个作业，尝试使用超过剩余配额的卡片资源
+			// Create third job, attempting to use card resource exceeding remaining quota
 			job3Spec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("third-quota-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -430,85 +430,85 @@ var _ = Describe("Capacity Card E2E Test", func() {
 					},
 				},
 				Annotations: map[string]string{
-					"volcano.sh/card.request": fmt.Sprintf(`{"%s": 1}`, CardTypeTeslaK80), // 超过队列剩余配额
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s": 1}`, CardTypeTeslaK80), // Exceeds remaining queue quota
 				},
 			}
 
-			fmt.Printf("测试4: 开始创建第三个作业 %s\n", job3Spec.Name)
+			fmt.Printf("Test 4: Starting to create third job %s\n", job3Spec.Name)
 			job3 := e2eutil.CreateJob(ctx, job3Spec)
-			fmt.Printf("测试4: 作业3 %s 创建成功，请求%s卡片资源为3（超出剩余配额）\n", job3.Name, CardTypeTeslaK80)
-			fmt.Printf("测试4: 作业3 %s 验证成功\n", job3.Name)
+			fmt.Printf("Test 4: Job 3 %s created successfully, requesting %s card resource as 3 (exceeding remaining quota)\n", job3.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 4: Job 3 %s validated successfully\n", job3.Name)
 
-			// 等待作业1就绪（作业1应该可以成功运行，因为没有超出配额）
-			fmt.Printf("测试4: 等待作业1就绪\n")
+			// Wait for job 1 to be ready (job 1 should run successfully as it doesn't exceed quota)
+			fmt.Printf("Test 4: Waiting for job 1 to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, job1)
-			Expect(err).NotTo(HaveOccurred(), "作业1未能在超时时间内就绪")
-			fmt.Printf("测试4: 作业1 %s 已就绪\n", job1.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job 1 failed to become ready within timeout")
+			fmt.Printf("Test 4: Job 1 %s is now ready\n", job1.Name)
 
-			// 等待作业1就绪（作业1应该可以成功运行，因为没有超出配额）
-			fmt.Printf("测试4: 等待作业2就绪\n")
+			// Wait for job 2 to be ready (job 2 should run successfully as it doesn't exceed quota)
+			fmt.Printf("Test 4: Waiting for job 2 to be ready\n")
 			err = e2eutil.WaitJobReady(ctx, job2)
-			Expect(err).NotTo(HaveOccurred(), "作业2未能在超时时间内就绪")
-			fmt.Printf("测试4: 作业2 %s 已就绪\n", job2.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job 2 failed to become ready within timeout")
+			fmt.Printf("Test 4: Job 2 %s is now ready\n", job2.Name)
 
-			// 对于作业3（超出配额），等待一段时间后检查状态
-			fmt.Printf("测试4: 等待一段时间检查作业3状态（预期因配额不足无法完全就绪）\n")
+			// For job 3 (exceeding quota), wait for some time then check status
+			fmt.Printf("Test 4: Waiting for some time to check job 3 status (expected to not be fully ready due to insufficient quota)\n")
 			time.Sleep(JobProcessTimeout / 2)
 
-			// 检查作业3状态
+			// Check job 3 status
 			job3Updated, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), job3.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "获取作业3状态失败")
-			fmt.Printf("测试4: 作业3当前状态: %s, Running: %d, Pending: %d\n",
+			Expect(err).NotTo(HaveOccurred(), "Failed to get job 3 status")
+			fmt.Printf("Test 4: Job 3 current status: %s, Running: %d, Pending: %d\n",
 				job3Updated.Status.State, job3Updated.Status.Running, job3Updated.Status.Pending)
 
-			// 校验作业2状态：由于超出配额，应该没有运行中的Pod
-			Expect(job3Updated.Status.Running).To(Equal(int32(0)), "作业3不应该有运行中的Pod，因为超出了队列配额")
+			// Verify job 3 status: should have no running pods due to exceeding quota
+			Expect(job3Updated.Status.Running).To(Equal(int32(0)), "Job 3 should not have running pods because it exceeded queue quota")
 
-			// 检查作业2关联的Pod状态
+			// Check pods associated with job 3
 			pods3, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", job3.Name),
 			})
-			Expect(err).NotTo(HaveOccurred(), "获取作业3的Pod列表失败")
+			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list for job 3")
 
-			// 打印Pod状态信息
+			// Print pod status information
 			for _, pod := range pods3.Items {
-				fmt.Printf("测试4: 作业3的Pod %s 状态: %s\n", pod.Name, pod.Status.Phase)
+				fmt.Printf("Test 4: Pod %s of job 3 status: %s\n", pod.Name, pod.Status.Phase)
 			}
 
-			// 校验Pod状态：作业2的Pod应该处于Pending状态（无法调度）
+			// Verify pod status: job 3 pods should be in Pending state (cannot be scheduled)
 			for _, pod := range pods3.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "作业3的Pod应该处于Pending状态，因为资源配额不足")
+				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Job 3 pods should be in Pending state due to insufficient resource quota")
 			}
 
-			fmt.Printf("测试4: 作业3 %s 验证完成 - 正确因配额限制无法调度\n", job3.Name)
+			fmt.Printf("Test 4: Job 3 %s validation completed - correctly failed to schedule due to quota limit\n", job3.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete jobs
 				e2eutil.DeleteJob(ctx, job1)
-				fmt.Printf("测试4: 作业1 %s 已清理\n", job1.Name)
+				fmt.Printf("Test 4: Job 1 %s cleaned up\n", job1.Name)
 				e2eutil.DeleteJob(ctx, job2)
-				fmt.Printf("测试4: 作业2 %s 已清理\n", job2.Name)
+				fmt.Printf("Test 4: Job 2 %s cleaned up\n", job2.Name)
 				e2eutil.DeleteJob(ctx, job3)
-				fmt.Printf("测试4: 作业3 %s 已清理\n", job3.Name)
+				fmt.Printf("Test 4: Job 3 %s cleaned up\n", job3.Name)
 
-				// 使用e2eutil删除队列
-				fmt.Printf("测试4: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 4: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 		})
 
-		// 测试5: RTX4090卡片队列容量管理测试
+		// Test 5: RTX4090 card queue capacity management test
 		It("RTX4090 Card Queue Capacity Management", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试5: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 5: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("rtx4090-card-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试5: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 5: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带RTX4090卡片配额的队列
+			// Create queue with RTX4090 card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("rtx4090-test-queue-%s", randomSuffix),
 				Weight: 10,
@@ -521,13 +521,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试5: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 5: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试5: 队列 %s 创建成功，%s卡片配额为4\n", queueSpec.Name, CardTypeRTX4090)
+			fmt.Printf("Test 5: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeRTX4090)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试5: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 5: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -535,28 +535,28 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试5: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 5: Queue %s status is now open\n", queueSpec.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试5: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 5: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 		})
 
-		// 测试6: H800卡片队列容量管理测试
+		// Test 6: H800 card queue capacity management test
 		It("H800 Card Queue Capacity Management", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试6: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 6: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("h800-card-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试6: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 6: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带H800卡片配额的队列
+			// Create queue with H800 card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("h800-test-queue-%s", randomSuffix),
 				Weight: 10,
@@ -569,13 +569,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试6: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 6: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试6: 队列 %s 创建成功，%s卡片配额为4\n", queueSpec.Name, CardTypeH800)
+			fmt.Printf("Test 6: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeH800)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试6: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 6: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -583,28 +583,28 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试6: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 6: Queue %s status is now open\n", queueSpec.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试6: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 6: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 		})
 
-		// 测试7: 多卡片类型混合配额测试
+		// Test 7: Multiple card types mixed quota test
 		It("Multiple Card Types Mixed Quota Test", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试7: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 7: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("multi-card-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试7: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 7: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带多种卡片配额的队列
+			// Create queue with multiple card quotas
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("multi-card-queue-%s", randomSuffix),
 				Weight: 10,
@@ -618,14 +618,14 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试7: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 7: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试7: 队列 %s 创建成功，混合卡片配额配置：%s:2, %s:2, %s:2\n",
+			fmt.Printf("Test 7: Queue %s created successfully, mixed card quota configured: %s:2, %s:2, %s:2\n",
 				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试7: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 7: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -633,28 +633,28 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试7: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 7: Queue %s status is now open\n", queueSpec.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试7: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 7: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 		})
 
-		// 测试8: 多卡片类型作业请求测试
+		// Test 8: Multiple card types job request test
 		It("Multiple Card Types Job Request Test", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试8: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 8: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("multi-card-job-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试8: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 8: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带多种卡片配额的队列
+			// Create queue with multiple card quotas
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("multi-card-job-queue-%s", randomSuffix),
 				Weight: 10,
@@ -668,14 +668,14 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试8: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 8: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试8: 队列 %s 创建成功，混合卡片配额配置：%s:8, %s:8, %s:8\n",
+			fmt.Printf("Test 8: Queue %s created successfully, mixed card quota configured: %s:8, %s:8, %s:8\n",
 				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试8: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 8: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -683,10 +683,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试8: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 8: Queue %s status is now open\n", queueSpec.Name)
 
-			// 创建一个请求多种卡片类型的作业
+			// Create a job requesting multiple card types
 			jobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("multi-card-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -736,44 +736,44 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 直接创建作业（不使用PodGroup）
-			fmt.Printf("测试8: 开始创建多卡片类型作业 %s\n", jobSpec.Name)
+			// Create job directly (without using PodGroup)
+			fmt.Printf("Test 8: Starting to create multiple card type job %s\n", jobSpec.Name)
 			job := e2eutil.CreateJob(ctx, jobSpec)
-			fmt.Printf("测试8: 多卡片类型作业 %s 创建成功，请求: %s:1, %s:1, %s:1\n",
+			fmt.Printf("Test 8: Multiple card type job %s created successfully, requesting: %s:1, %s:1, %s:1\n",
 				job.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
 
-			// 等待作业就绪
-			fmt.Printf("测试8: 等待作业就绪\n")
+			// Wait for job to be ready
+			fmt.Printf("Test 8: Waiting for job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "作业未能在超时时间内就绪")
-			fmt.Printf("测试8: 作业 %s 已就绪\n", job.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 8: Job %s is now ready\n", job.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete job
 				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("测试8: 作业 %s 已清理\n", job.Name)
+				fmt.Printf("Test 8: Job %s cleaned up\n", job.Name)
 
-				// 使用e2eutil删除队列
-				fmt.Printf("测试8: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 8: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 		})
 
-		// 测试9: 基于卡片类型的优先级调度测试
+		// Test 9: Card type based priority scheduling test
 		It("Card Type Based Priority Scheduling Test", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试9: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 9: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("priority-card-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试9: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 9: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建高优先级队列 - 用于H800卡片
+			// Create high priority queue - for H800 cards
 			priorityQueueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("high-priority-queue-%s", randomSuffix),
-				Weight: 100, // 高权重
+				Weight: 100, // High weight
 				Capacity: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse("2"),
 					v1.ResourceMemory: resource.MustParse("2Gi"),
@@ -783,15 +783,15 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建高优先级队列
-			fmt.Printf("测试9: 开始创建高优先级队列 %s\n", priorityQueueSpec.Name)
+			// Create high priority queue using e2eutil function
+			fmt.Printf("Test 9: Starting to create high priority queue %s\n", priorityQueueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, priorityQueueSpec)
-			fmt.Printf("测试9: 高优先级队列 %s 创建成功，%s卡片配额为4\n", priorityQueueSpec.Name, CardTypeH800)
+			fmt.Printf("Test 9: High priority queue %s created successfully, %s card quota is 4\n", priorityQueueSpec.Name, CardTypeH800)
 
-			// 创建低优先级队列 - 用于RTX4090卡片
+			// Create normal priority queue - for RTX4090 cards
 			normalQueueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("normal-priority-queue-%s", randomSuffix),
-				Weight: 10, // 低权重
+				Weight: 10, // Low weight
 				Capacity: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse("2"),
 					v1.ResourceMemory: resource.MustParse("2Gi"),
@@ -801,13 +801,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建低优先级队列
-			fmt.Printf("测试9: 开始创建低优先级队列 %s\n", normalQueueSpec.Name)
+			// Create normal priority queue using e2eutil function
+			fmt.Printf("Test 9: Starting to create normal priority queue %s\n", normalQueueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, normalQueueSpec)
-			fmt.Printf("测试9: 低优先级队列 %s 创建成功，%s卡片配额为4\n", normalQueueSpec.Name, CardTypeRTX4090)
+			fmt.Printf("Test 9: Normal priority queue %s created successfully, %s card quota is 4\n", normalQueueSpec.Name, CardTypeRTX4090)
 
-			// 等待高优先级队列状态变为开放
-			fmt.Printf("测试9: 等待高优先级队列 %s 状态变为开放\n", priorityQueueSpec.Name)
+			// Wait for high priority queue status to become open
+			fmt.Printf("Test 9: Waiting for high priority queue %s status to become open\n", priorityQueueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), priorityQueueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -815,10 +815,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "高优先级队列未能在超时时间内变为开放状态")
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "High priority queue failed to become open within timeout")
 
-			// 等待低优先级队列状态变为开放
-			fmt.Printf("测试9: 等待低优先级队列 %s 状态变为开放\n", normalQueueSpec.Name)
+			// Wait for normal priority queue status to become open
+			fmt.Printf("Test 9: Waiting for normal priority queue %s status to become open\n", normalQueueSpec.Name)
 			queueOpenErr = e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), normalQueueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -826,21 +826,21 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "低优先级队列未能在超时时间内变为开放状态")
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Normal priority queue failed to become open within timeout")
 
-			fmt.Printf("测试9: 两个队列状态已变为开放\n")
+			fmt.Printf("Test 9: Both queues status are now open\n")
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试9: 清理高优先级队列 %s\n", priorityQueueSpec.Name)
+				// Delete queues using e2eutil
+				fmt.Printf("Test 9: Cleaning up high priority queue %s\n", priorityQueueSpec.Name)
 				e2eutil.DeleteQueue(ctx, priorityQueueSpec.Name)
 
-				fmt.Printf("测试9: 清理低优先级队列 %s\n", normalQueueSpec.Name)
+				fmt.Printf("Test 9: Cleaning up normal priority queue %s\n", normalQueueSpec.Name)
 				e2eutil.DeleteQueue(ctx, normalQueueSpec.Name)
 			}()
 
-			// 创建高优先级作业（H800卡片）
+			// Create high priority job (H800 card)
 			highPriorityJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("high-priority-job-%s", randomSuffix),
 				Queue: priorityQueueSpec.Name,
@@ -871,12 +871,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 直接创建高优先级作业（不使用PodGroup）
-			fmt.Printf("测试9: 开始创建高优先级作业 %s\n", highPriorityJobSpec.Name)
+			// Create high priority job directly (without using PodGroup)
+			fmt.Printf("Test 9: Starting to create high priority job %s\n", highPriorityJobSpec.Name)
 			highPriorityJob := e2eutil.CreateJob(ctx, highPriorityJobSpec)
-			fmt.Printf("测试9: 高优先级作业 %s 创建成功，请求%s卡片资源\n", highPriorityJob.Name, CardTypeH800)
+			fmt.Printf("Test 9: High priority job %s created successfully, requesting %s card resource\n", highPriorityJob.Name, CardTypeH800)
 
-			// 创建低优先级作业（RTX4090卡片）
+			// Create normal priority job (RTX4090 card)
 			normalPriorityJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("normal-priority-job-%s", randomSuffix),
 				Queue: normalQueueSpec.Name,
@@ -907,44 +907,44 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 直接创建低优先级作业（不使用PodGroup）
-			fmt.Printf("测试9: 开始创建低优先级作业 %s\n", normalPriorityJobSpec.Name)
+			// Create normal priority job directly (without using PodGroup)
+			fmt.Printf("Test 9: Starting to create normal priority job %s\n", normalPriorityJobSpec.Name)
 			normalPriorityJob := e2eutil.CreateJob(ctx, normalPriorityJobSpec)
-			fmt.Printf("测试9: 低优先级作业 %s 创建成功，请求%s卡片资源\n", normalPriorityJob.Name, CardTypeRTX4090)
+			fmt.Printf("Test 9: Normal priority job %s created successfully, requesting %s card resource\n", normalPriorityJob.Name, CardTypeRTX4090)
 
-			// 等待高优先级作业就绪
-			fmt.Printf("测试9: 等待高优先级作业就绪\n")
+			// Wait for high priority job to be ready
+			fmt.Printf("Test 9: Waiting for high priority job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, highPriorityJob)
-			Expect(err).NotTo(HaveOccurred(), "高优先级作业未能在超时时间内就绪")
-			fmt.Printf("测试9: 高优先级作业 %s 已就绪\n", highPriorityJob.Name)
+			Expect(err).NotTo(HaveOccurred(), "High priority job failed to become ready within timeout")
+			fmt.Printf("Test 9: High priority job %s is now ready\n", highPriorityJob.Name)
 
-			// 等待低优先级作业就绪
-			fmt.Printf("测试9: 等待低优先级作业就绪\n")
+			// Wait for normal priority job to be ready
+			fmt.Printf("Test 9: Waiting for normal priority job to be ready\n")
 			err = e2eutil.WaitJobReady(ctx, normalPriorityJob)
-			Expect(err).NotTo(HaveOccurred(), "低优先级作业未能在超时时间内就绪")
-			fmt.Printf("测试9: 低优先级作业 %s 已就绪\n", normalPriorityJob.Name)
+			Expect(err).NotTo(HaveOccurred(), "Normal priority job failed to become ready within timeout")
+			fmt.Printf("Test 9: Normal priority job %s is now ready\n", normalPriorityJob.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete jobs
 				e2eutil.DeleteJob(ctx, highPriorityJob)
-				fmt.Printf("测试9: 高优先级作业 %s 已清理\n", highPriorityJob.Name)
+				fmt.Printf("Test 9: High priority job %s cleaned up\n", highPriorityJob.Name)
 				e2eutil.DeleteJob(ctx, normalPriorityJob)
-				fmt.Printf("测试9: 低优先级作业 %s 已清理\n", normalPriorityJob.Name)
+				fmt.Printf("Test 9: Normal priority job %s cleaned up\n", normalPriorityJob.Name)
 			}()
 		})
 
-		// 测试10: CPU内存无限配额下混合作业测试
+		// Test 10: Mixed jobs test with unlimited CPU memory
 		It("Mixed Jobs with CardUnlimitedCpuMemory", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试10: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 10: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("mixed-jobs-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试10: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 10: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带卡片配额和cardUnlimitedCpuMemory=true的队列
+			// Create queue with card quota and cardUnlimitedCpuMemory=true
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("mixed-jobs-queue-%s", randomSuffix),
 				Weight: 10,
@@ -957,13 +957,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试10: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 10: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试10: 队列 %s 创建成功，配置Tesla-K80卡片配额4，CPU/内存无限\n", queueSpec.Name)
+			fmt.Printf("Test 10: Queue %s created successfully, configured Tesla-K80 card quota 4, unlimited CPU/memory\n", queueSpec.Name)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试10: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 10: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -971,17 +971,17 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试10: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 10: Queue %s status is now open\n", queueSpec.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试10: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 10: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 
-			// 1. 创建一个纯CPU作业
+			// 1. Create a CPU-only job
 			cpuJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("cpu-only-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -999,12 +999,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 创建纯CPU作业
-			fmt.Printf("测试10: 开始创建纯CPU作业 %s\n", cpuJobSpec.Name)
+			// Create CPU-only job
+			fmt.Printf("Test 10: Starting to create CPU-only job %s\n", cpuJobSpec.Name)
 			cpuJob := e2eutil.CreateJob(ctx, cpuJobSpec)
-			fmt.Printf("测试10: 纯CPU作业 %s 创建成功\n", cpuJob.Name)
+			fmt.Printf("Test 10: CPU-only job %s created successfully\n", cpuJob.Name)
 
-			// 2. 创建一个具有卡片请求的作业
+			// 2. Create a job with card request
 			cardJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("card-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -1034,12 +1034,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 创建带卡片请求的作业
-			fmt.Printf("测试10: 开始创建带卡片请求的作业 %s\n", cardJobSpec.Name)
+			// Create job with card request
+			fmt.Printf("Test 10: Starting to create job with card request %s\n", cardJobSpec.Name)
 			cardJob := e2eutil.CreateJob(ctx, cardJobSpec)
-			fmt.Printf("测试10: 带卡片请求作业 %s 创建成功，请求Tesla-K80卡片2张\n", cardJob.Name)
+			fmt.Printf("Test 10: Job with card request %s created successfully, requesting 2 Tesla-K80 cards\n", cardJob.Name)
 
-			// 3. 创建一个超额纯CPU作业
+			// 3. Create an excess CPU-only job
 			overCpuJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("over-cpu-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -1057,53 +1057,53 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 创建纯CPU作业
-			fmt.Printf("测试10: 开始创建超额纯CPU作业 %s\n", overCpuJobSpec.Name)
+			// Create excess CPU-only job
+			fmt.Printf("Test 10: Starting to create excess CPU-only job %s\n", overCpuJobSpec.Name)
 			overCpuJob := e2eutil.CreateJob(ctx, overCpuJobSpec)
-			fmt.Printf("测试10: 超额纯CPU作业 %s 创建成功\n", overCpuJob.Name)
+			fmt.Printf("Test 10: Excess CPU-only job %s created successfully\n", overCpuJob.Name)
 
-			// 等待纯CPU作业就绪
-			fmt.Printf("测试10: 等待纯CPU作业就绪\n")
+			// Wait for CPU-only job to be ready
+			fmt.Printf("Test 10: Waiting for CPU-only job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, cpuJob)
-			Expect(err).NotTo(HaveOccurred(), "纯CPU作业未能在超时时间内就绪")
-			fmt.Printf("测试10: 纯CPU作业 %s 已就绪\n", cpuJob.Name)
+			Expect(err).NotTo(HaveOccurred(), "CPU-only job failed to become ready within timeout")
+			fmt.Printf("Test 10: CPU-only job %s is now ready\n", cpuJob.Name)
 
-			// 等待带卡片请求的作业就绪
-			fmt.Printf("测试10: 等待带卡片请求的作业就绪\n")
+			// Wait for job with card request to be ready
+			fmt.Printf("Test 10: Waiting for job with card request to be ready\n")
 			err = e2eutil.WaitJobReady(ctx, cardJob)
-			Expect(err).NotTo(HaveOccurred(), "带卡片请求作业未能在超时时间内就绪")
-			fmt.Printf("测试10: 带卡片请求作业 %s 已就绪\n", cardJob.Name)
+			Expect(err).NotTo(HaveOccurred(), "Job with card request failed to become ready within timeout")
+			fmt.Printf("Test 10: Job with card request %s is now ready\n", cardJob.Name)
 
-			// 等待超额纯CPU作业调度失败
-			fmt.Printf("测试10: 等待超额纯CPU作业调度失败\n")
+			// Wait for excess CPU-only job to fail scheduling
+			fmt.Printf("Test 10: Waiting for excess CPU-only job to fail scheduling\n")
 			updatedJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), overCpuJob.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "获取作业状态失败")
-			fmt.Printf("测试10: 作业当前状态: %s, Running: %d, Pending: %d, Failed: %d\n",
+			Expect(err).NotTo(HaveOccurred(), "Failed to get job status")
+			fmt.Printf("Test 10: Job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
 				updatedJob.Status.State, updatedJob.Status.Running, updatedJob.Status.Pending, updatedJob.Status.Failed)
 
-			// 检查关联的Pod
+			// Check associated pods
 			pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", overCpuJob.Name),
 			})
-			Expect(err).NotTo(HaveOccurred(), "获取Pod列表失败")
+			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list")
 
-			// 打印Pod状态信息
+			// Print pod status information
 			for _, pod := range pods.Items {
-				fmt.Printf("测试10: Pod %s 状态: %s\n", pod.Name, pod.Status.Phase)
+				fmt.Printf("Test 10: Pod %s status: %s\n", pod.Name, pod.Status.Phase)
 			}
 
-			// 校验作业状态：应该没有运行中的Pod（因为无资源配额）
-			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "作业不应该有运行中的Pod，因为超额")
+			// Verify job status: should have no running pods (due to excess quota)
+			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "Job should not have running pods due to excess")
 
-			// 校验作业状态：作业应该处于Pending状态
-			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "作业应该处于Pending状态，因为超额")
+			// Verify job status: job should be in Pending state
+			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Job should be in Pending state due to excess")
 
-			// 校验Pod状态：所有Pod都应该处于Pending状态（无法调度）
+			// Verify pod status: all pods should be in Pending state (cannot be scheduled)
 			for _, pod := range pods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod应该处于Pending状态，因为超额")
+				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod should be in Pending state due to excess")
 			}
 
-			// 校验Pod调度条件：Pod应该有Unschedulable条件
+			// Verify pod scheduling condition: pods should have Unschedulable condition
 			for _, pod := range pods.Items {
 				hasUnschedulableCondition := false
 				for _, condition := range pod.Status.Conditions {
@@ -1112,43 +1112,43 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						break
 					}
 				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod应该有Unschedulable条件，表示超额")
+				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod should have Unschedulable condition indicating excess")
 			}
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete jobs
 				e2eutil.DeleteJob(ctx, cpuJob)
-				fmt.Printf("测试10: 纯CPU作业 %s 已清理\n", cpuJob.Name)
+				fmt.Printf("Test 10: CPU-only job %s cleaned up\n", cpuJob.Name)
 				e2eutil.DeleteJob(ctx, cardJob)
-				fmt.Printf("测试10: 带卡片请求作业 %s 已清理\n", cardJob.Name)
+				fmt.Printf("Test 10: Job with card request %s cleaned up\n", cardJob.Name)
 			}()
 		})
 
-		// 测试11: 无资源配额队列调度限制测试
+		// Test 11: No resource quota queue scheduling restriction test
 		It("No Resource Quota Queue Scheduling Restriction", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试11: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 11: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("no-quota-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试11: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 11: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建无任何资源配额的队列（不设置卡配额、CPU和内存保证）
+			// Create queue without any resource quota (no card quota, CPU and memory guarantee)
 			queueSpec := &e2eutil.QueueSpec{
 				Name:        fmt.Sprintf("no-quota-queue-%s", randomSuffix),
 				Weight:      10,
 				Annotations: map[string]string{},
 			}
 
-			// 使用e2eutil函数创建队列
-			fmt.Printf("测试11: 开始创建无资源配额队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil function
+			fmt.Printf("Test 11: Starting to create queue without resource quota %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试11: 无资源配额队列 %s 创建成功\n", queueSpec.Name)
+			fmt.Printf("Test 11: Queue without resource quota %s created successfully\n", queueSpec.Name)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试11: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 11: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -1156,17 +1156,17 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试11: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 11: Queue %s status is now open\n", queueSpec.Name)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 使用e2eutil删除队列
-				fmt.Printf("测试11: 清理队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 11: Cleaning up queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
 			}()
 
-			// 创建一个作业，尝试调度到无资源配额的队列
+			// Create a job, attempting to schedule to queue without resource quota
 			jobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("test-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -1184,12 +1184,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 直接创建作业（不使用PodGroup），并设置卡片请求的annotations
-			fmt.Printf("测试11: 开始创建测试作业 %s\n", jobSpec.Name)
+			// Create job directly (without using PodGroup), and set card request annotations
+			fmt.Printf("Test 11: Starting to create test job %s\n", jobSpec.Name)
 			job := e2eutil.CreateJob(ctx, jobSpec)
-			fmt.Printf("测试11: 测试作业 %s 创建成功，尝试调度到无资源配额队列\n", job.Name)
+			fmt.Printf("Test 11: Test job %s created successfully, attempting to schedule to queue without resource quota\n", job.Name)
 
-			// 创建一个卡作业，尝试调度到无资源配额的队列
+			// Create a card job, attempting to schedule to queue without resource quota
 			cardJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("test-card-job-%s", randomSuffix),
 				Queue: queueSpec.Name,
@@ -1219,46 +1219,46 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 直接创建作业（不使用PodGroup），并设置卡片请求的annotations
-			fmt.Printf("测试11: 开始创建测试作业 %s\n", cardJobSpec.Name)
+			// Create job directly (without using PodGroup), and set card request annotations
+			fmt.Printf("Test 11: Starting to create test job %s\n", cardJobSpec.Name)
 			cardJob := e2eutil.CreateJob(ctx, cardJobSpec)
-			fmt.Printf("测试11: 测试作业 %s 创建成功，尝试调度到无资源配额队列\n", cardJob.Name)
+			fmt.Printf("Test 11: Test job %s created successfully, attempting to schedule to queue without resource quota\n", cardJob.Name)
 
-			// 等待一段时间，让调度器尝试调度
-			fmt.Printf("测试11: 等待调度器处理作业，超时时间为 %v\n", JobProcessTimeout/2)
+			// Wait for some time to let scheduler attempt scheduling
+			fmt.Printf("Test 11: Waiting for scheduler to process jobs, timeout is %v\n", JobProcessTimeout/2)
 			time.Sleep(JobProcessTimeout / 2)
-			fmt.Printf("测试11: 调度器处理时间结束\n")
+			fmt.Printf("Test 11: Scheduler processing time ended\n")
 
-			// 检查作业状态（应该没有被调度）
-			fmt.Printf("测试11: 检查作业状态\n")
+			// Check job status (should not be scheduled)
+			fmt.Printf("Test 11: Checking job status\n")
 			updatedJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), job.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "获取作业状态失败")
-			fmt.Printf("测试11: 作业当前状态: %s, Running: %d, Pending: %d, Failed: %d\n",
+			Expect(err).NotTo(HaveOccurred(), "Failed to get job status")
+			fmt.Printf("Test 11: Job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
 				updatedJob.Status.State, updatedJob.Status.Running, updatedJob.Status.Pending, updatedJob.Status.Failed)
 
-			// 检查关联的Pod
+			// Check associated pods
 			pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", job.Name),
 			})
-			Expect(err).NotTo(HaveOccurred(), "获取Pod列表失败")
+			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list")
 
-			// 打印Pod状态信息
+			// Print pod status information
 			for _, pod := range pods.Items {
-				fmt.Printf("测试11: Pod %s 状态: %s\n", pod.Name, pod.Status.Phase)
+				fmt.Printf("Test 11: Pod %s status: %s\n", pod.Name, pod.Status.Phase)
 			}
 
-			// 校验作业状态：应该没有运行中的Pod（因为无资源配额）
-			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "作业不应该有运行中的Pod，因为队列没有资源配额")
+			// Verify job status: should have no running pods (due to no resource quota)
+			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "Job should not have running pods because queue has no resource quota")
 
-			// 校验作业状态：作业应该处于Pending状态
-			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "作业应该处于Pending状态，因为无法调度")
+			// Verify job status: job should be in Pending state
+			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Job should be in Pending state due to inability to schedule")
 
-			// 校验Pod状态：所有Pod都应该处于Pending状态（无法调度）
+			// Verify pod status: all pods should be in Pending state (cannot be scheduled)
 			for _, pod := range pods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod应该处于Pending状态，因为资源配额不足")
+				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod should be in Pending state due to insufficient resource quota")
 			}
 
-			// 校验Pod调度条件：Pod应该有Unschedulable条件
+			// Verify pod scheduling condition: pods should have Unschedulable condition
 			for _, pod := range pods.Items {
 				hasUnschedulableCondition := false
 				for _, condition := range pod.Status.Conditions {
@@ -1267,39 +1267,39 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						break
 					}
 				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod应该有Unschedulable条件，表示无法调度")
+				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod should have Unschedulable condition indicating inability to schedule")
 			}
 
-			// 检查卡片作业状态（应该没有被调度）
-			fmt.Printf("测试11: 检查卡片作业状态\n")
+			// Check card job status (should not be scheduled)
+			fmt.Printf("Test 11: Checking card job status\n")
 			updatedCardJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), cardJob.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "获取卡片作业状态失败")
-			fmt.Printf("测试11: 卡片作业当前状态: %s, Running: %d, Pending: %d, Failed: %d\n",
+			Expect(err).NotTo(HaveOccurred(), "Failed to get card job status")
+			fmt.Printf("Test 11: Card job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
 				updatedCardJob.Status.State, updatedCardJob.Status.Running, updatedCardJob.Status.Pending, updatedCardJob.Status.Failed)
 
-			// 检查卡片作业关联的Pod
+			// Check pods associated with card job
 			cardPods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", cardJob.Name),
 			})
-			Expect(err).NotTo(HaveOccurred(), "获取卡片作业Pod列表失败")
+			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list for card job")
 
-			// 打印卡片作业Pod状态信息
+			// Print card job pod status information
 			for _, pod := range cardPods.Items {
-				fmt.Printf("测试11: 卡片作业Pod %s 状态: %s\n", pod.Name, pod.Status.Phase)
+				fmt.Printf("Test 11: Card job pod %s status: %s\n", pod.Name, pod.Status.Phase)
 			}
 
-			// 校验卡片作业状态：应该没有运行中的Pod（因为无资源配额）
-			Expect(updatedCardJob.Status.Running).To(Equal(int32(0)), "卡片作业不应该有运行中的Pod，因为队列没有资源配额")
+			// Verify card job status: should have no running pods (due to no resource quota)
+			Expect(updatedCardJob.Status.Running).To(Equal(int32(0)), "Card job should not have running pods because queue has no resource quota")
 
-			// 校验卡片作业状态：卡片作业应该处于Pending状态
-			Expect(updatedCardJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "卡片作业应该处于Pending状态，因为无法调度")
+			// Verify card job status: card job should be in Pending state
+			Expect(updatedCardJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Card job should be in Pending state due to inability to schedule")
 
-			// 校验卡片作业Pod状态：所有卡片作业Pod都应该处于Pending状态（无法调度）
+			// Verify card job pod status: all card job pods should be in Pending state (cannot be scheduled)
 			for _, pod := range cardPods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "卡片作业Pod应该处于Pending状态，因为资源配额不足")
+				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Card job pod should be in Pending state due to insufficient resource quota")
 			}
 
-			// 校验卡片作业Pod调度条件：卡片作业Pod应该有Unschedulable条件
+			// Verify card job pod scheduling condition: card job pods should have Unschedulable condition
 			for _, pod := range cardPods.Items {
 				hasUnschedulableCondition := false
 				for _, condition := range pod.Status.Conditions {
@@ -1308,32 +1308,32 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						break
 					}
 				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "卡片作业Pod应该有Unschedulable条件，表示无法调度")
+				Expect(hasUnschedulableCondition).To(BeTrue(), "Card job pod should have Unschedulable condition indicating inability to schedule")
 			}
 
-			fmt.Printf("测试11: 验证通过 - 作业正确地被拒绝在无资源配额队列中调度\n")
+			fmt.Printf("Test 11: Validation passed - jobs correctly rejected from scheduling in queue without resource quota\n")
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				// 删除作业
+				// Delete job
 				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("测试11: 作业 %s 已清理\n", job.Name)
+				fmt.Printf("Test 11: Job %s cleaned up\n", job.Name)
 			}()
 		})
 	})
 
 	Context("Capacity Card - Deployment", func() {
-		// 测试12: Deployment GPU卡片资源分配测试
+		// Test 12: Deployment GPU card resource allocation test
 		It("Deployment GPU Card Resource Allocation", func() {
 			randomSuffix := generateRandomSuffix()
-			fmt.Printf("测试12: 生成随机后缀 %s\n", randomSuffix)
+			fmt.Printf("Test 12: Generated random suffix %s\n", randomSuffix)
 			ctx := e2eutil.InitTestContext(e2eutil.Options{
 				Namespace: fmt.Sprintf("deployment-card-test-%s", randomSuffix),
 			})
-			fmt.Printf("测试12: 测试上下文初始化完成，命名空间 %s\n", ctx.Namespace)
+			fmt.Printf("Test 12: Test context initialized, namespace %s\n", ctx.Namespace)
 			defer e2eutil.CleanupTestContext(ctx)
 
-			// 创建带卡片配额的队列
+			// Create queue with card quota
 			queueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("deployment-queue-%s", randomSuffix),
 				Weight: 10,
@@ -1346,13 +1346,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 使用e2eutil创建队列
-			fmt.Printf("测试12: 开始创建队列 %s\n", queueSpec.Name)
+			// Create queue using e2eutil
+			fmt.Printf("Test 12: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
-			fmt.Printf("测试12: 队列 %s 创建成功，RTX4090卡片配额为2\n", queueSpec.Name)
+			fmt.Printf("Test 12: Queue %s created successfully, RTX4090 card quota is 2\n", queueSpec.Name)
 
-			// 等待队列状态变为开放
-			fmt.Printf("测试12: 等待队列 %s 状态变为开放\n", queueSpec.Name)
+			// Wait for queue status to become open
+			fmt.Printf("Test 12: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
 				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
 				if err != nil {
@@ -1360,10 +1360,10 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				}
 				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
 			})
-			Expect(queueOpenErr).NotTo(HaveOccurred(), "队列未能在超时时间内变为开放状态")
-			fmt.Printf("测试12: 队列 %s 状态已变为开放\n", queueSpec.Name)
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
+			fmt.Printf("Test 12: Queue %s status is now open\n", queueSpec.Name)
 
-			// 创建Deployment并添加GPU卡片请求注解
+			// Create Deployment and add GPU card request annotation
 			deploymentName := fmt.Sprintf("gpu-card-deployment-%s", randomSuffix)
 			deployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1390,8 +1390,9 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						Spec: v1.PodSpec{
 							Containers: []v1.Container{
 								{
-									Name:  "nginx",
-									Image: e2eutil.DefaultNginxImage,
+									Name:            "nginx",
+									Image:           e2eutil.DefaultNginxImage,
+									ImagePullPolicy: v1.PullIfNotPresent,
 									Resources: v1.ResourceRequirements{
 										Requests: v1.ResourceList{
 											v1.ResourceCPU:                    resource.MustParse("1"),
@@ -1412,39 +1413,39 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				},
 			}
 
-			// 创建Deployment
-			fmt.Printf("测试12: 开始创建Deployment %s\n", deploymentName)
+			// Create Deployment
+			fmt.Printf("Test 12: Starting to create Deployment %s\n", deploymentName)
 			_, err := ctx.Kubeclient.AppsV1().Deployments(ctx.Namespace).Create(context.TODO(), deployment, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
-			fmt.Printf("测试12: Deployment %s 创建成功，请求RTX4090卡片资源\n", deploymentName)
+			fmt.Printf("Test 12: Deployment %s created successfully, requesting RTX4090 card resource\n", deploymentName)
 
-			// 等待Deployment就绪
-			fmt.Printf("测试12: 等待Deployment就绪\n")
+			// Wait for Deployment to be ready
+			fmt.Printf("Test 12: Waiting for Deployment to be ready\n")
 			err = e2eutil.WaitDeploymentReady(ctx, deploymentName)
-			Expect(err).NotTo(HaveOccurred(), "Deployment未能在超时时间内就绪")
-			fmt.Printf("测试12: Deployment %s 已就绪\n", deploymentName)
+			Expect(err).NotTo(HaveOccurred(), "Deployment failed to become ready within timeout")
+			fmt.Printf("Test 12: Deployment %s is now ready\n", deploymentName)
 
-			// 清理资源
+			// Clean up resources
 			defer func() {
-				fmt.Printf("测试12: 开始清理资源\n")
-				// 删除Deployment
-				fmt.Printf("测试12: 删除Deployment %s\n", deploymentName)
+				fmt.Printf("Test 12: Starting to clean up resources\n")
+				// Delete Deployment
+				fmt.Printf("Test 12: Deleting Deployment %s\n", deploymentName)
 				if err := ctx.Kubeclient.AppsV1().Deployments(ctx.Namespace).Delete(context.TODO(), deploymentName, metav1.DeleteOptions{}); err != nil {
-					fmt.Printf("测试12-警告：删除Deployment %s 失败: %v\n", deploymentName, err)
+					fmt.Printf("Test 12-Warning: Failed to delete Deployment %s: %v\n", deploymentName, err)
 				} else {
-					fmt.Printf("测试12: Deployment %s 删除成功\n", deploymentName)
+					fmt.Printf("Test 12: Deployment %s deleted successfully\n", deploymentName)
 				}
 
-				// 使用e2eutil删除队列
-				fmt.Printf("测试12: 删除队列 %s\n", queueSpec.Name)
+				// Delete queue using e2eutil
+				fmt.Printf("Test 12: Deleting queue %s\n", queueSpec.Name)
 				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("测试12: 资源清理完成\n")
+				fmt.Printf("Test 12: Resource cleanup completed\n")
 			}()
 		})
 	})
 })
 
-// 辅助函数：int32指针
+// Helper function: int32 pointer
 func int32Ptr(i int32) *int32 {
 	return &i
 }

@@ -30,10 +30,13 @@ CLUSTER_NAME=${CLUSTER_NAME:-integration}
 export CLUSTER_CONTEXT=("--name" "${CLUSTER_NAME}")
 
 export KIND_OPT=${KIND_OPT:="--config ${VK_ROOT}/hack/e2e-kind-config.yaml"}
-
+export FAKE_GPU_OPERATOR_VALUES=${FAKE_GPU_OPERATOR_VALUES:="${VK_ROOT}/hack/fake-gpu-operator-values.yaml"}
 # kwok node config
 export KWOK_NODE_CPU=${KWOK_NODE_CPU:-8}      # 8 cores
 export KWOK_NODE_MEMORY=${KWOK_NODE_MEMORY:-8Gi}  # 8GB
+
+# pull images and load into kind cluster if PULL_IMAGES is true
+export PULL_IMAGES=${PULL_IMAGES:-false}
 
 # create kwok node
 function create-kwok-node() {
@@ -153,6 +156,8 @@ function generate-log {
 function cleanup {
   uninstall-volcano
 
+  uninstall-gpu-operator
+
   echo "Running kind: [kind delete cluster ${CLUSTER_CONTEXT[*]}]"
   kind delete cluster "${CLUSTER_CONTEXT[@]}"
 }
@@ -187,6 +192,8 @@ install-kwok-with-helm
 if [[ -z ${KUBECONFIG+x} ]]; then
     export KUBECONFIG="${HOME}/.kube/config"
 fi
+
+install-fake-gpu-operator
 
 install-volcano
 

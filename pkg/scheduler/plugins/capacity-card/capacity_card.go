@@ -152,6 +152,8 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 			p.OnDeallocate(ssn, event)
 		},
 	})
+
+	// TODO: add AddNodeOrderFn for job using multi-card resources. To support card selection by order.
 }
 
 // OnSessionClose cleans up the plugin state.

@@ -49,6 +49,10 @@ const (
 )
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.
+// name is the name of the object name (e.g. job, task, queue, etc.)
+// annotations is the annotations of the object
+// key is the key of the annotations
+// return the card resource
 func GetCardResourceFromAnnotations(name string, annotations map[string]string, key string) *api.Resource {
 	cardResource := api.EmptyResource()
 	if cardJson, ok := annotations[key]; ok && cardJson != "" {
@@ -104,6 +108,8 @@ func CheckSingleScalarResource(
 		// NVIDIA-GTX-GeForce-4090D and NVIDIA-H200 in `toBeUsedResource` do not contain the requested 2 card, so it should be added to each card name.
 		// `multiCardToBeUsedResource` scalar quant is {"NVIDIA-GTX-GeForce-4090D|NVIDIA-H200": 2, "NVIDIA-GTX-GeForce-4090D": 7, "NVIDIA-H200": 10}
 		multiCardToBeUsedResource := toBeUsedResource.Clone()
+		// TODO: Support different Pods in the same job using different kind of cards, but a pod using one kind of card.
+		// now all pods in the same job using the same kind of cards.
 		for _, cardName := range multiCardNames {
 			multiCardToBeUsedResource.ScalarResources[v1.ResourceName(cardName)] += scalarQuant
 			if result = CheckSingleScalarResource(
