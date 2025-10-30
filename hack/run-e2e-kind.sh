@@ -30,10 +30,13 @@ CLUSTER_NAME=${CLUSTER_NAME:-integration}
 export CLUSTER_CONTEXT=("--name" "${CLUSTER_NAME}")
 
 export KIND_OPT=${KIND_OPT:="--config ${VK_ROOT}/hack/e2e-kind-config.yaml"}
-
+export FAKE_GPU_OPERATOR_VALUES=${FAKE_GPU_OPERATOR_VALUES:="${VK_ROOT}/hack/fake-gpu-operator-values.yaml"}
 # kwok node config
 export KWOK_NODE_CPU=${KWOK_NODE_CPU:-8}      # 8 cores
 export KWOK_NODE_MEMORY=${KWOK_NODE_MEMORY:-8Gi}  # 8GB
+
+# pull images and load into kind cluster if PULL_IMAGES is true
+export PULL_IMAGES=${PULL_IMAGES:-false}
 
 # create kwok node
 function create-kwok-node() {
@@ -153,6 +156,8 @@ function generate-log {
 function cleanup {
   uninstall-volcano
 
+  uninstall-gpu-operator
+
   echo "Running kind: [kind delete cluster ${CLUSTER_CONTEXT[*]}]"
   kind delete cluster "${CLUSTER_CONTEXT[@]}"
 }
@@ -188,6 +193,8 @@ if [[ -z ${KUBECONFIG+x} ]]; then
     export KUBECONFIG="${HOME}/.kube/config"
 fi
 
+install-fake-gpu-operator
+
 install-volcano
 
 # Run e2e test
@@ -206,6 +213,7 @@ case ${E2E_TYPE} in
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/cronjob/
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress --focus="DRA E2E Test" ./test/e2e/dra/
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/hypernode/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/capacitycard/
     ;;
 "JOBP")
     echo "Running parallel job e2e suite..."
@@ -245,7 +253,11 @@ case ${E2E_TYPE} in
     echo "Running cronjob e2e suite..."  
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -v -r --slow-spec-threshold='30s' --progress ./test/e2e/cronjob/  
     ;;
-esac
+"CAPACITYCARD")
+    echo "Running capacitycard e2e suite..."
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -v -r --slow-spec-threshold='30s' --progress ./test/e2e/capacitycard/
+    ;;
+  esac
 
 if [[ $? -ne 0 ]]; then
   generate-log
