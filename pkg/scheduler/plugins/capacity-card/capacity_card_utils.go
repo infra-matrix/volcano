@@ -49,7 +49,7 @@ const (
 )
 
 // GetCardResourceFromAnnotations extracts card resource from annotations.
-// name is the name of the object name (e.g. job, task, queue, etc.)
+// name is the name of the object name (e.g. job, task, queue, etc.) in string format which is used for logging the error message when unmarshal card json failed.
 // annotations is the annotations of the object
 // key is the key of the annotations
 // return the card resource

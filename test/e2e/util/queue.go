@@ -50,17 +50,17 @@ func CreateQueueWithQueueSpec(ctx *TestContext, queueSpec *QueueSpec) {
 			},
 		}
 
-		// 设置注解
+		// set annotations
 		if queueSpec.Annotations != nil {
 			queue.ObjectMeta.Annotations = queueSpec.Annotations
 		}
 
-		// 设置保证资源
+		// set guarantee resource
 		if len(queueSpec.GuaranteeResource) != 0 {
 			queue.Spec.Guarantee.Resource = queueSpec.GuaranteeResource
 		}
 
-		// 设置容量
+		// set capacity
 		if len(queueSpec.Capacity) != 0 {
 			queue.Spec.Capability = queueSpec.Capacity
 		}
