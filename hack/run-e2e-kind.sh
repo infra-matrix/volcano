@@ -163,7 +163,9 @@ function generate-log {
 function cleanup {
   uninstall-volcano
 
-  uninstall-gpu-operator
+  if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
+    uninstall-fake-gpu-operator
+  fi
 
   echo "Running kind: [kind delete cluster ${CLUSTER_CONTEXT[*]}]"
   kind delete cluster "${CLUSTER_CONTEXT[@]}"

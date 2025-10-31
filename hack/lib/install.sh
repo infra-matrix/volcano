@@ -158,6 +158,6 @@ function check-fake-gpu-operator {
 }
 
 
-function uninstall-gpu-operator {
+function uninstall-fake-gpu-operator {
   helm uninstall fake-gpu-operator -n gpu-operator
 }
