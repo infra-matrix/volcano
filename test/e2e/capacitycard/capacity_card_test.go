@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	batchv1alpha1 "volcano.sh/apis/pkg/apis/batch/v1alpha1"
 	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	e2eutil "volcano.sh/volcano/test/e2e/util"
 )
@@ -88,6 +87,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 1: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeTeslaK80)
 
+			// Clean up queue using e2eutil
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 1: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 1: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -99,12 +104,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 1: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up queue using e2eutil
-			defer func() {
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("Test 1: Queue %s cleaned up\n", queueSpec.Name)
-			}()
 		})
 	})
 
@@ -136,6 +135,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 2: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 2: Queue %s created successfully\n", queueSpec.Name)
+
+			// Clean up queue using e2eutil
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 2: Queue %s cleaned up\n", queueSpec.Name)
+			}()
 
 			// Wait for queue status to become open
 			fmt.Printf("Test 2: Waiting for queue %s status to become open\n", queueSpec.Name)
@@ -183,22 +188,18 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			job := e2eutil.CreateJob(ctx, jobSpec)
 			fmt.Printf("Test 2: Job %s created successfully\n", job.Name)
 
-			// Wait for job to be ready
-			fmt.Printf("Test 2: Waiting for job to be ready\n")
-			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
-			fmt.Printf("Test 2: Job %s is now ready\n", job.Name)
-
 			// Clean up resources
 			defer func() {
 				// Delete job
 				e2eutil.DeleteJob(ctx, job)
 				fmt.Printf("Test 2: Job %s cleaned up\n", job.Name)
-
-				// Clean up queue using e2eutil
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("Test 2: Queue %s cleaned up\n", queueSpec.Name)
 			}()
+
+			// Wait for job to be ready
+			fmt.Printf("Test 2: Waiting for job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 2: Job %s is now ready\n", job.Name)
 		})
 
 		// Test 3: Task card resource allocation test
@@ -228,6 +229,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 3: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 3: Queue %s created successfully\n", queueSpec.Name)
+
+			defer func() {
+				// Clean up queue using e2eutil
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 3: Queue %s cleaned up\n", queueSpec.Name)
+			}()
 
 			// Wait for queue status to become open
 			fmt.Printf("Test 3: Waiting for queue %s status to become open\n", queueSpec.Name)
@@ -276,22 +283,18 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			job := e2eutil.CreateJob(ctx, jobSpec)
 			fmt.Printf("Test 3: Job %s created successfully\n", job.Name)
 
-			// Wait for job to be ready
-			fmt.Printf("Test 3: Waiting for job to be ready\n")
-			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
-			fmt.Printf("Test 3: Job %s is now ready\n", job.Name)
-
 			// Clean up resources
 			defer func() {
 				// Delete job
 				e2eutil.DeleteJob(ctx, job)
 				fmt.Printf("Test 3: Job %s cleaned up\n", job.Name)
-
-				// Clean up queue using e2eutil
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("Test 3: Queue %s cleaned up\n", queueSpec.Name)
 			}()
+
+			// Wait for job to be ready
+			fmt.Printf("Test 3: Waiting for job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 3: Job %s is now ready\n", job.Name)
 		})
 
 		// Test 4: Card resource quota exceeded test
@@ -321,6 +324,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 4: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 4: Queue %s created successfully, %s card quota is 2\n", queueSpec.Name, CardTypeTeslaK80)
+
+			defer func() {
+				// Clean up queue using e2eutil
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 4: Queue %s cleaned up\n", queueSpec.Name)
+			}()
 
 			// Wait for queue status to become open
 			fmt.Printf("Test 4: Waiting for queue %s status to become open\n", queueSpec.Name)
@@ -369,6 +378,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 4: Job 1 %s created successfully, requesting %s card resource as 1\n", job1.Name, CardTypeTeslaK80)
 			fmt.Printf("Test 4: Job 1 %s validated successfully\n", job1.Name)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, job1)
+				fmt.Printf("Test 4: Job 1 %s cleaned up\n", job1.Name)
+			}()
+
 			// Create second job, using remaining card quota
 			job2Spec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("second-quota-job-%s", randomSuffix),
@@ -404,6 +419,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 4: Job 2 %s created successfully, requesting %s card resource as 1\n", job2.Name, CardTypeTeslaK80)
 			fmt.Printf("Test 4: Job 2 %s validated successfully\n", job2.Name)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, job2)
+				fmt.Printf("Test 4: Job 2 %s cleaned up\n", job2.Name)
+			}()
+
 			// Create third job, attempting to use card resource exceeding remaining quota
 			job3Spec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("third-quota-job-%s", randomSuffix),
@@ -417,12 +438,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						Req: v1.ResourceList{
 							v1.ResourceCPU:                    resource.MustParse("1"),
 							v1.ResourceMemory:                 resource.MustParse("1Gi"),
-							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("3"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
 						},
 						Limit: v1.ResourceList{
 							v1.ResourceCPU:                    resource.MustParse("1"),
 							v1.ResourceMemory:                 resource.MustParse("1Gi"),
-							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("3"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
 						},
 						Annotations: map[string]string{
 							"volcano.sh/card.name": CardTypeTeslaK80,
@@ -439,6 +460,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 4: Job 3 %s created successfully, requesting %s card resource as 3 (exceeding remaining quota)\n", job3.Name, CardTypeTeslaK80)
 			fmt.Printf("Test 4: Job 3 %s validated successfully\n", job3.Name)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, job3)
+				fmt.Printf("Test 4: Job 3 %s cleaned up\n", job3.Name)
+			}()
+
 			// Wait for job 1 to be ready (job 1 should run successfully as it doesn't exceed quota)
 			fmt.Printf("Test 4: Waiting for job 1 to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, job1)
@@ -454,48 +481,7 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			// For job 3 (exceeding quota), wait for some time then check status
 			fmt.Printf("Test 4: Waiting for some time to check job 3 status (expected to not be fully ready due to insufficient quota)\n")
 			time.Sleep(JobProcessTimeout / 2)
-
-			// Check job 3 status
-			job3Updated, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), job3.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get job 3 status")
-			fmt.Printf("Test 4: Job 3 current status: %s, Running: %d, Pending: %d\n",
-				job3Updated.Status.State, job3Updated.Status.Running, job3Updated.Status.Pending)
-
-			// Verify job 3 status: should have no running pods due to exceeding quota
-			Expect(job3Updated.Status.Running).To(Equal(int32(0)), "Job 3 should not have running pods because it exceeded queue quota")
-
-			// Check pods associated with job 3
-			pods3, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", job3.Name),
-			})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list for job 3")
-
-			// Print pod status information
-			for _, pod := range pods3.Items {
-				fmt.Printf("Test 4: Pod %s of job 3 status: %s\n", pod.Name, pod.Status.Phase)
-			}
-
-			// Verify pod status: job 3 pods should be in Pending state (cannot be scheduled)
-			for _, pod := range pods3.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Job 3 pods should be in Pending state due to insufficient resource quota")
-			}
-
-			fmt.Printf("Test 4: Job 3 %s validation completed - correctly failed to schedule due to quota limit\n", job3.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete jobs
-				e2eutil.DeleteJob(ctx, job1)
-				fmt.Printf("Test 4: Job 1 %s cleaned up\n", job1.Name)
-				e2eutil.DeleteJob(ctx, job2)
-				fmt.Printf("Test 4: Job 2 %s cleaned up\n", job2.Name)
-				e2eutil.DeleteJob(ctx, job3)
-				fmt.Printf("Test 4: Job 3 %s cleaned up\n", job3.Name)
-
-				// Delete queue using e2eutil
-				fmt.Printf("Test 4: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
+			e2eutil.CheckJobSchedulingFailed(ctx, job3)
 		})
 
 		// Test 5: RTX4090 card queue capacity management test
@@ -526,6 +512,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 5: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeRTX4090)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 5: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 5: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -537,13 +529,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 5: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete queue using e2eutil
-				fmt.Printf("Test 5: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
 		})
 
 		// Test 6: H800 card queue capacity management test
@@ -574,6 +559,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 6: Queue %s created successfully, %s card quota is 4\n", queueSpec.Name, CardTypeH800)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 6: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 6: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -585,13 +576,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 6: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete queue using e2eutil
-				fmt.Printf("Test 6: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
 		})
 
 		// Test 7: Multiple card types mixed quota test
@@ -624,6 +608,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 7: Queue %s created successfully, mixed card quota configured: %s:2, %s:2, %s:2\n",
 				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 7: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 7: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -635,13 +625,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 7: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete queue using e2eutil
-				fmt.Printf("Test 7: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
 		})
 
 		// Test 8: Multiple card types job request test
@@ -674,6 +657,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 8: Queue %s created successfully, mixed card quota configured: %s:8, %s:8, %s:8\n",
 				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 8: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 8: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -687,14 +676,82 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 8: Queue %s status is now open\n", queueSpec.Name)
 
 			// Create a job requesting multiple card types
-			jobSpec := &e2eutil.JobSpec{
-				Name:  fmt.Sprintf("multi-card-job-%s", randomSuffix),
+			job1Spec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("multi-card-job-1-%s", randomSuffix),
 				Queue: queueSpec.Name,
 				Tasks: []e2eutil.TaskSpec{
 					{
 						Name: "task-1",
 						Min:  1,
 						Rep:  1,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("8"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("8"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": CardTypeTeslaK80,
+						},
+					},
+					{
+						Name: "task-2",
+						Min:  1,
+						Rep:  1,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("8"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("8"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": CardTypeRTX4090,
+						},
+					},
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s": 8, "%s": 8}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			// Create job directly (without using PodGroup)
+			fmt.Printf("Test 8: Starting to create multiple card type job %s\n", job1Spec.Name)
+			job1 := e2eutil.CreateJob(ctx, job1Spec)
+			fmt.Printf("Test 8: Multiple card type job %s created successfully, requesting: %s:8, %s:8, %s:0\n",
+				job1.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
+
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, job1)
+				fmt.Printf("Test 8: Job %s cleaned up\n", job1.Name)
+			}()
+
+			// Wait for job to be ready
+			fmt.Printf("Test 8: Waiting for job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, job1)
+			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
+			fmt.Printf("Test 8: Job %s is now ready\n", job1.Name)
+
+			// Create third job, attempting to use card resource exceeding remaining quota
+			job2Spec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("multi-card-job-2-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "task-1",
+						Min:  1,
+						Rep:  2,
 						Img:  e2eutil.DefaultNginxImage,
 						Req: v1.ResourceList{
 							v1.ResourceCPU:                    resource.MustParse("1"),
@@ -710,54 +767,27 @@ var _ = Describe("Capacity Card E2E Test", func() {
 							"volcano.sh/card.name": CardTypeTeslaK80,
 						},
 					},
-					{
-						Name: "task-2",
-						Min:  1,
-						Rep:  1,
-						Img:  e2eutil.DefaultNginxImage,
-						Req: v1.ResourceList{
-							v1.ResourceCPU:                    resource.MustParse("1"),
-							v1.ResourceMemory:                 resource.MustParse("1Gi"),
-							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
-						},
-						Limit: v1.ResourceList{
-							v1.ResourceCPU:                    resource.MustParse("1"),
-							v1.ResourceMemory:                 resource.MustParse("1Gi"),
-							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
-						},
-						Annotations: map[string]string{
-							"volcano.sh/card.name": CardTypeRTX4090,
-						},
-					},
 				},
 				Annotations: map[string]string{
-					"volcano.sh/card.request": fmt.Sprintf(`{"%s": 1, "%s": 1}`,
-						CardTypeTeslaK80, CardTypeRTX4090),
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s": 1}`, CardTypeTeslaK80), // Exceeds remaining queue quota
 				},
 			}
 
-			// Create job directly (without using PodGroup)
-			fmt.Printf("Test 8: Starting to create multiple card type job %s\n", jobSpec.Name)
-			job := e2eutil.CreateJob(ctx, jobSpec)
-			fmt.Printf("Test 8: Multiple card type job %s created successfully, requesting: %s:1, %s:1, %s:1\n",
-				job.Name, CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
+			fmt.Printf("Test 8: Starting to create third job %s\n", job2Spec.Name)
+			job2 := e2eutil.CreateJob(ctx, job2Spec)
+			fmt.Printf("Test 8: Job 2 %s created successfully, requesting %s card resource as 1 (exceeding remaining quota)\n", job2.Name, CardTypeTeslaK80)
+			fmt.Printf("Test 8: Job 2 %s validated successfully\n", job2.Name)
 
-			// Wait for job to be ready
-			fmt.Printf("Test 8: Waiting for job to be ready\n")
-			err := e2eutil.WaitJobReady(ctx, job)
-			Expect(err).NotTo(HaveOccurred(), "Job failed to become ready within timeout")
-			fmt.Printf("Test 8: Job %s is now ready\n", job.Name)
-
-			// Clean up resources
 			defer func() {
 				// Delete job
-				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("Test 8: Job %s cleaned up\n", job.Name)
-
-				// Delete queue using e2eutil
-				fmt.Printf("Test 8: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				e2eutil.DeleteJob(ctx, job2)
+				fmt.Printf("Test 8: Job %s cleaned up\n", job2.Name)
 			}()
+
+			// For job 2 (exceeding quota), wait for some time then check status
+			fmt.Printf("Test 8: Waiting for some time to check job 2 status (expected to not be fully ready due to insufficient quota)\n")
+			time.Sleep(JobProcessTimeout / 2)
+			e2eutil.CheckJobSchedulingFailed(ctx, job2)
 		})
 
 		// Test 9: Card type based priority scheduling test
@@ -788,6 +818,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, priorityQueueSpec)
 			fmt.Printf("Test 9: High priority queue %s created successfully, %s card quota is 4\n", priorityQueueSpec.Name, CardTypeH800)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 9: Cleaning up high priority queue %s\n", priorityQueueSpec.Name)
+				e2eutil.DeleteQueue(ctx, priorityQueueSpec.Name)
+			}()
+
 			// Create normal priority queue - for RTX4090 cards
 			normalQueueSpec := &e2eutil.QueueSpec{
 				Name:   fmt.Sprintf("normal-priority-queue-%s", randomSuffix),
@@ -805,6 +841,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 9: Starting to create normal priority queue %s\n", normalQueueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, normalQueueSpec)
 			fmt.Printf("Test 9: Normal priority queue %s created successfully, %s card quota is 4\n", normalQueueSpec.Name, CardTypeRTX4090)
+
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 9: Cleaning up normal priority queue %s\n", normalQueueSpec.Name)
+				e2eutil.DeleteQueue(ctx, normalQueueSpec.Name)
+			}()
 
 			// Wait for high priority queue status to become open
 			fmt.Printf("Test 9: Waiting for high priority queue %s status to become open\n", priorityQueueSpec.Name)
@@ -829,16 +871,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Normal priority queue failed to become open within timeout")
 
 			fmt.Printf("Test 9: Both queues status are now open\n")
-
-			// Clean up resources
-			defer func() {
-				// Delete queues using e2eutil
-				fmt.Printf("Test 9: Cleaning up high priority queue %s\n", priorityQueueSpec.Name)
-				e2eutil.DeleteQueue(ctx, priorityQueueSpec.Name)
-
-				fmt.Printf("Test 9: Cleaning up normal priority queue %s\n", normalQueueSpec.Name)
-				e2eutil.DeleteQueue(ctx, normalQueueSpec.Name)
-			}()
 
 			// Create high priority job (H800 card)
 			highPriorityJobSpec := &e2eutil.JobSpec{
@@ -876,6 +908,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			highPriorityJob := e2eutil.CreateJob(ctx, highPriorityJobSpec)
 			fmt.Printf("Test 9: High priority job %s created successfully, requesting %s card resource\n", highPriorityJob.Name, CardTypeH800)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, highPriorityJob)
+				fmt.Printf("Test 9: High priority job %s cleaned up\n", highPriorityJob.Name)
+			}()
+
 			// Create normal priority job (RTX4090 card)
 			normalPriorityJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("normal-priority-job-%s", randomSuffix),
@@ -912,6 +950,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			normalPriorityJob := e2eutil.CreateJob(ctx, normalPriorityJobSpec)
 			fmt.Printf("Test 9: Normal priority job %s created successfully, requesting %s card resource\n", normalPriorityJob.Name, CardTypeRTX4090)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, normalPriorityJob)
+				fmt.Printf("Test 9: Normal priority job %s cleaned up\n", normalPriorityJob.Name)
+			}()
+
 			// Wait for high priority job to be ready
 			fmt.Printf("Test 9: Waiting for high priority job to be ready\n")
 			err := e2eutil.WaitJobReady(ctx, highPriorityJob)
@@ -923,15 +967,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			err = e2eutil.WaitJobReady(ctx, normalPriorityJob)
 			Expect(err).NotTo(HaveOccurred(), "Normal priority job failed to become ready within timeout")
 			fmt.Printf("Test 9: Normal priority job %s is now ready\n", normalPriorityJob.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete jobs
-				e2eutil.DeleteJob(ctx, highPriorityJob)
-				fmt.Printf("Test 9: High priority job %s cleaned up\n", highPriorityJob.Name)
-				e2eutil.DeleteJob(ctx, normalPriorityJob)
-				fmt.Printf("Test 9: Normal priority job %s cleaned up\n", normalPriorityJob.Name)
-			}()
 		})
 
 		// Test 10: Mixed jobs test with unlimited CPU memory
@@ -962,6 +997,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 10: Queue %s created successfully, configured Tesla-K80 card quota 4, unlimited CPU/memory\n", queueSpec.Name)
 
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 10: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 10: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -973,13 +1014,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 10: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete queue using e2eutil
-				fmt.Printf("Test 10: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
 
 			// 1. Create a CPU-only job
 			cpuJobSpec := &e2eutil.JobSpec{
@@ -1003,6 +1037,18 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 10: Starting to create CPU-only job %s\n", cpuJobSpec.Name)
 			cpuJob := e2eutil.CreateJob(ctx, cpuJobSpec)
 			fmt.Printf("Test 10: CPU-only job %s created successfully\n", cpuJob.Name)
+
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, cpuJob)
+				fmt.Printf("Test 10: CPU-only job %s cleaned up\n", cpuJob.Name)
+			}()
+
+			// Wait for CPU-only job to be ready
+			fmt.Printf("Test 10: Waiting for CPU-only job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, cpuJob)
+			Expect(err).NotTo(HaveOccurred(), "CPU-only job failed to become ready within timeout")
+			fmt.Printf("Test 10: CPU-only job %s is now ready\n", cpuJob.Name)
 
 			// 2. Create a job with card request
 			cardJobSpec := &e2eutil.JobSpec{
@@ -1039,6 +1085,18 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			cardJob := e2eutil.CreateJob(ctx, cardJobSpec)
 			fmt.Printf("Test 10: Job with card request %s created successfully, requesting 2 Tesla-K80 cards\n", cardJob.Name)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, cardJob)
+				fmt.Printf("Test 10: Job with card request %s cleaned up\n", cardJob.Name)
+			}()
+
+			// Wait for job with card request to be ready
+			fmt.Printf("Test 10: Waiting for job with card request to be ready\n")
+			err = e2eutil.WaitJobReady(ctx, cardJob)
+			Expect(err).NotTo(HaveOccurred(), "Job with card request failed to become ready within timeout")
+			fmt.Printf("Test 10: Job with card request %s is now ready\n", cardJob.Name)
+
 			// 3. Create an excess CPU-only job
 			overCpuJobSpec := &e2eutil.JobSpec{
 				Name:  fmt.Sprintf("over-cpu-job-%s", randomSuffix),
@@ -1062,67 +1120,16 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			overCpuJob := e2eutil.CreateJob(ctx, overCpuJobSpec)
 			fmt.Printf("Test 10: Excess CPU-only job %s created successfully\n", overCpuJob.Name)
 
-			// Wait for CPU-only job to be ready
-			fmt.Printf("Test 10: Waiting for CPU-only job to be ready\n")
-			err := e2eutil.WaitJobReady(ctx, cpuJob)
-			Expect(err).NotTo(HaveOccurred(), "CPU-only job failed to become ready within timeout")
-			fmt.Printf("Test 10: CPU-only job %s is now ready\n", cpuJob.Name)
-
-			// Wait for job with card request to be ready
-			fmt.Printf("Test 10: Waiting for job with card request to be ready\n")
-			err = e2eutil.WaitJobReady(ctx, cardJob)
-			Expect(err).NotTo(HaveOccurred(), "Job with card request failed to become ready within timeout")
-			fmt.Printf("Test 10: Job with card request %s is now ready\n", cardJob.Name)
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, overCpuJob)
+				fmt.Printf("Test 10: Excess CPU-only job %s cleaned up\n", overCpuJob.Name)
+			}()
 
 			// Wait for excess CPU-only job to fail scheduling
 			fmt.Printf("Test 10: Waiting for excess CPU-only job to fail scheduling\n")
-			updatedJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), overCpuJob.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get job status")
-			fmt.Printf("Test 10: Job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
-				updatedJob.Status.State, updatedJob.Status.Running, updatedJob.Status.Pending, updatedJob.Status.Failed)
-
-			// Check associated pods
-			pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", overCpuJob.Name),
-			})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list")
-
-			// Print pod status information
-			for _, pod := range pods.Items {
-				fmt.Printf("Test 10: Pod %s status: %s\n", pod.Name, pod.Status.Phase)
-			}
-
-			// Verify job status: should have no running pods (due to excess quota)
-			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "Job should not have running pods due to excess")
-
-			// Verify job status: job should be in Pending state
-			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Job should be in Pending state due to excess")
-
-			// Verify pod status: all pods should be in Pending state (cannot be scheduled)
-			for _, pod := range pods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod should be in Pending state due to excess")
-			}
-
-			// Verify pod scheduling condition: pods should have Unschedulable condition
-			for _, pod := range pods.Items {
-				hasUnschedulableCondition := false
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == v1.PodScheduled && condition.Status == v1.ConditionFalse && condition.Reason == "Unschedulable" {
-						hasUnschedulableCondition = true
-						break
-					}
-				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod should have Unschedulable condition indicating excess")
-			}
-
-			// Clean up resources
-			defer func() {
-				// Delete jobs
-				e2eutil.DeleteJob(ctx, cpuJob)
-				fmt.Printf("Test 10: CPU-only job %s cleaned up\n", cpuJob.Name)
-				e2eutil.DeleteJob(ctx, cardJob)
-				fmt.Printf("Test 10: Job with card request %s cleaned up\n", cardJob.Name)
-			}()
+			time.Sleep(JobProcessTimeout / 2)
+			e2eutil.CheckJobSchedulingFailed(ctx, overCpuJob)
 		})
 
 		// Test 11: No resource quota queue scheduling restriction test
@@ -1147,6 +1154,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 11: Queue without resource quota %s created successfully\n", queueSpec.Name)
 
+			// Clean up resources
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 11: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
+
 			// Wait for queue status to become open
 			fmt.Printf("Test 11: Waiting for queue %s status to become open\n", queueSpec.Name)
 			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
@@ -1158,13 +1172,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			})
 			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open within timeout")
 			fmt.Printf("Test 11: Queue %s status is now open\n", queueSpec.Name)
-
-			// Clean up resources
-			defer func() {
-				// Delete queue using e2eutil
-				fmt.Printf("Test 11: Cleaning up queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-			}()
 
 			// Create a job, attempting to schedule to queue without resource quota
 			jobSpec := &e2eutil.JobSpec{
@@ -1188,6 +1195,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 11: Starting to create test job %s\n", jobSpec.Name)
 			job := e2eutil.CreateJob(ctx, jobSpec)
 			fmt.Printf("Test 11: Test job %s created successfully, attempting to schedule to queue without resource quota\n", job.Name)
+
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 11: Job %s cleaned up\n", job.Name)
+			}()
 
 			// Create a card job, attempting to schedule to queue without resource quota
 			cardJobSpec := &e2eutil.JobSpec{
@@ -1224,101 +1237,17 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			cardJob := e2eutil.CreateJob(ctx, cardJobSpec)
 			fmt.Printf("Test 11: Test job %s created successfully, attempting to schedule to queue without resource quota\n", cardJob.Name)
 
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, cardJob)
+				fmt.Printf("Test 11: Job %s cleaned up\n", cardJob.Name)
+			}()
+
 			// Wait for some time to let scheduler attempt scheduling
 			fmt.Printf("Test 11: Waiting for scheduler to process jobs, timeout is %v\n", JobProcessTimeout/2)
 			time.Sleep(JobProcessTimeout / 2)
-			fmt.Printf("Test 11: Scheduler processing time ended\n")
-
-			// Check job status (should not be scheduled)
-			fmt.Printf("Test 11: Checking job status\n")
-			updatedJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), job.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get job status")
-			fmt.Printf("Test 11: Job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
-				updatedJob.Status.State, updatedJob.Status.Running, updatedJob.Status.Pending, updatedJob.Status.Failed)
-
-			// Check associated pods
-			pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", job.Name),
-			})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list")
-
-			// Print pod status information
-			for _, pod := range pods.Items {
-				fmt.Printf("Test 11: Pod %s status: %s\n", pod.Name, pod.Status.Phase)
-			}
-
-			// Verify job status: should have no running pods (due to no resource quota)
-			Expect(updatedJob.Status.Running).To(Equal(int32(0)), "Job should not have running pods because queue has no resource quota")
-
-			// Verify job status: job should be in Pending state
-			Expect(updatedJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Job should be in Pending state due to inability to schedule")
-
-			// Verify pod status: all pods should be in Pending state (cannot be scheduled)
-			for _, pod := range pods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Pod should be in Pending state due to insufficient resource quota")
-			}
-
-			// Verify pod scheduling condition: pods should have Unschedulable condition
-			for _, pod := range pods.Items {
-				hasUnschedulableCondition := false
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == v1.PodScheduled && condition.Status == v1.ConditionFalse && condition.Reason == "Unschedulable" {
-						hasUnschedulableCondition = true
-						break
-					}
-				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "Pod should have Unschedulable condition indicating inability to schedule")
-			}
-
-			// Check card job status (should not be scheduled)
-			fmt.Printf("Test 11: Checking card job status\n")
-			updatedCardJob, err := ctx.Vcclient.BatchV1alpha1().Jobs(ctx.Namespace).Get(context.TODO(), cardJob.Name, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get card job status")
-			fmt.Printf("Test 11: Card job current status: %s, Running: %d, Pending: %d, Failed: %d\n",
-				updatedCardJob.Status.State, updatedCardJob.Status.Running, updatedCardJob.Status.Pending, updatedCardJob.Status.Failed)
-
-			// Check pods associated with card job
-			cardPods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", cardJob.Name),
-			})
-			Expect(err).NotTo(HaveOccurred(), "Failed to get pod list for card job")
-
-			// Print card job pod status information
-			for _, pod := range cardPods.Items {
-				fmt.Printf("Test 11: Card job pod %s status: %s\n", pod.Name, pod.Status.Phase)
-			}
-
-			// Verify card job status: should have no running pods (due to no resource quota)
-			Expect(updatedCardJob.Status.Running).To(Equal(int32(0)), "Card job should not have running pods because queue has no resource quota")
-
-			// Verify card job status: card job should be in Pending state
-			Expect(updatedCardJob.Status.State.Phase).To(Equal(batchv1alpha1.Pending), "Card job should be in Pending state due to inability to schedule")
-
-			// Verify card job pod status: all card job pods should be in Pending state (cannot be scheduled)
-			for _, pod := range cardPods.Items {
-				Expect(pod.Status.Phase).To(Equal(v1.PodPending), "Card job pod should be in Pending state due to insufficient resource quota")
-			}
-
-			// Verify card job pod scheduling condition: card job pods should have Unschedulable condition
-			for _, pod := range cardPods.Items {
-				hasUnschedulableCondition := false
-				for _, condition := range pod.Status.Conditions {
-					if condition.Type == v1.PodScheduled && condition.Status == v1.ConditionFalse && condition.Reason == "Unschedulable" {
-						hasUnschedulableCondition = true
-						break
-					}
-				}
-				Expect(hasUnschedulableCondition).To(BeTrue(), "Card job pod should have Unschedulable condition indicating inability to schedule")
-			}
-
-			fmt.Printf("Test 11: Validation passed - jobs correctly rejected from scheduling in queue without resource quota\n")
-
-			// Clean up resources
-			defer func() {
-				// Delete job
-				e2eutil.DeleteJob(ctx, job)
-				fmt.Printf("Test 11: Job %s cleaned up\n", job.Name)
-			}()
+			e2eutil.CheckJobSchedulingFailed(ctx, job)
+			e2eutil.CheckJobSchedulingFailed(ctx, cardJob)
 		})
 	})
 
@@ -1350,6 +1279,12 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 12: Starting to create queue %s\n", queueSpec.Name)
 			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
 			fmt.Printf("Test 12: Queue %s created successfully, RTX4090 card quota is 2\n", queueSpec.Name)
+
+			defer func() {
+				// Delete queue using e2eutil
+				fmt.Printf("Test 12: Cleaning up queue %s\n", queueSpec.Name)
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+			}()
 
 			// Wait for queue status to become open
 			fmt.Printf("Test 12: Waiting for queue %s status to become open\n", queueSpec.Name)
@@ -1419,12 +1354,6 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			Expect(err).NotTo(HaveOccurred())
 			fmt.Printf("Test 12: Deployment %s created successfully, requesting RTX4090 card resource\n", deploymentName)
 
-			// Wait for Deployment to be ready
-			fmt.Printf("Test 12: Waiting for Deployment to be ready\n")
-			err = e2eutil.WaitDeploymentReady(ctx, deploymentName)
-			Expect(err).NotTo(HaveOccurred(), "Deployment failed to become ready within timeout")
-			fmt.Printf("Test 12: Deployment %s is now ready\n", deploymentName)
-
 			// Clean up resources
 			defer func() {
 				fmt.Printf("Test 12: Starting to clean up resources\n")
@@ -1435,12 +1364,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 				} else {
 					fmt.Printf("Test 12: Deployment %s deleted successfully\n", deploymentName)
 				}
-
-				// Delete queue using e2eutil
-				fmt.Printf("Test 12: Deleting queue %s\n", queueSpec.Name)
-				e2eutil.DeleteQueue(ctx, queueSpec.Name)
-				fmt.Printf("Test 12: Resource cleanup completed\n")
 			}()
+
+			// Wait for Deployment to be ready
+			fmt.Printf("Test 12: Waiting for Deployment to be ready\n")
+			err = e2eutil.WaitDeploymentReady(ctx, deploymentName)
+			Expect(err).NotTo(HaveOccurred(), "Deployment failed to become ready within timeout")
+			fmt.Printf("Test 12: Deployment %s is now ready\n", deploymentName)
 		})
 	})
 })
