@@ -12,7 +12,7 @@ As AI and HPC workloads increasingly rely on diverse GPU hardware (A100, H100, H
 
 Current Kubernetes native resource management faces several limitations when dealing with heterogeneous GPU clusters:
 
-1. **Lack of Fine-grained Card Type Management**: Standard Kubernetes resource requests cannot distinguish between different GPU card types (e.g., A100 vs V100) or different GPU sharing profile (MPS, MIG etc.).
+1. **Lack of Fine-grained Card Type Management**: Standard Kubernetes resource requests cannot distinguish between different GPU card types (e.g., A100 vs V100) or different GPU sharing profiles (MPS, MIG etc.).
 
 2. **Insufficient Queue-level Card Quota Control**: Organizations need to allocate specific numbers of different card types to different teams/projects, which cannot be easily achieved with native Kubernetes resource quotas.
 
@@ -480,13 +480,13 @@ spec:
 ## Future Work
 
 - Node-level card selection ordering function
-- Support different Pods in the same job using different kind of cards
-- Support Preemption and reclaim
+- Support different Pods in the same job using different kinds of cards
+- Support preemption and reclaim
 
 ## References
 
 - [Volcano Capacity Scheduling Design](./capacity-scheduling.md)
 - [NVIDIA MPS Documentation](https://docs.nvidia.com/deploy/mps/index.html)
 - [NVIDIA MIG User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/)
-- [Volcano Scheduler Framework](https://volcano.sh/en/docs/schduler_introduction/)
+- [Volcano Scheduler Framework](https://volcano.sh/en/docs/)
 

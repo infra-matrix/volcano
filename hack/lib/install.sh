@@ -145,13 +145,12 @@ function install-fake-gpu-operator {
   check-fake-gpu-operator
 }
 
-# check if kind installed
+# check if fake gpu operator is ready
 function check-fake-gpu-operator {
   echo "Checking fake gpu operator"
   # retry get gpu resources on nodes
-  for true; do
-    kubectl get nodes -l nvidia.com/gpu.present=true | tail -n +2 | wc -l | grep 3
-    if [[ $? -eq 0 ]]; then
+  while true; do
+    if [[ $(kubectl get nodes -l nvidia.com/gpu.present=true --no-headers | wc -l) -eq 3 ]]; then
       break
     fi
     sleep 1

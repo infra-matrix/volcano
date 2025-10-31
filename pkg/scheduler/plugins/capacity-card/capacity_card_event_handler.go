@@ -79,6 +79,7 @@ func (p *Plugin) OnDeallocate(ssn *framework.Session, event *framework.Event) {
 	metrics.UpdateQueueAllocated(
 		qAttr.name, qAttr.allocated.MilliCPU, qAttr.allocated.Memory, qAttr.allocated.ScalarResources,
 	)
+	p.updateShare(qAttr)
 	klog.V(4).Infof(
 		"Capacity EvictFunc: task <%v/%v>, resreq <%v>, share <%v>",
 		task.Namespace, task.Name, taskReqResource, qAttr.share,
