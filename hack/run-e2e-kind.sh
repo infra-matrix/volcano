@@ -39,7 +39,7 @@ export KWOK_NODE_MEMORY=${KWOK_NODE_MEMORY:-8Gi}  # 8GB
 export PULL_IMAGES=${PULL_IMAGES:-false}
 
 # scheduler config
-if [ ${E2E_TYPE} == "CAPACITYCARD" ]; then
+if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
   export VOLCANO_SCHEDULER_CONFIG="config/volcano-scheduler-capacity-card-ci.conf"
 else
   export VOLCANO_SCHEDULER_CONFIG="config/volcano-scheduler-ci.conf"
@@ -200,7 +200,9 @@ if [[ -z ${KUBECONFIG+x} ]]; then
     export KUBECONFIG="${HOME}/.kube/config"
 fi
 
-install-fake-gpu-operator
+if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
+  install-fake-gpu-operator
+fi
 
 install-volcano
 
