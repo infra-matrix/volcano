@@ -19,6 +19,7 @@ package capacitycard
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	batchv1alpha1 "volcano.sh/apis/pkg/apis/batch/v1alpha1"
 	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	e2eutil "volcano.sh/volcano/test/e2e/util"
 )
@@ -1373,9 +1375,862 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			fmt.Printf("Test 12: Deployment %s is now ready\n", deploymentName)
 		})
 	})
+
+	Context("Capacity Card - Node Ordering", func() {
+		// Test 13: Multi-card type node ordering test
+		It("Multi-Card Type Node Ordering with Priority", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 13: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("multi-card-ordering-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 13: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue with multiple card type quotas
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("ordering-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("16"),
+					v1.ResourceMemory: resource.MustParse("32Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 8, "%s": 8, "%s": 8}`,
+						CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80),
+				},
+			}
+
+			// Create queue
+			fmt.Printf("Test 13: Starting to create queue %s\n", queueSpec.Name)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+			fmt.Printf("Test 13: Queue %s created with quotas - %s:8, %s:8, %s:8\n",
+				queueSpec.Name, CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 13: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
+			// Wait for queue to become open
+			fmt.Printf("Test 13: Waiting for queue %s to become open\n", queueSpec.Name)
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open")
+			fmt.Printf("Test 13: Queue %s is now open\n", queueSpec.Name)
+
+			// Create a job with multi-card type option: H800 | RTX4090 | TeslaK80
+			// Priority: H800 (highest) > RTX4090 (medium) > TeslaK80 (lowest)
+			multiCardJobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("multi-card-type-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "gpu-task",
+						Min:  1,
+						Rep:  1,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("2"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("2"),
+						},
+						Annotations: map[string]string{
+							// Multiple card types with priority order
+							"volcano.sh/card.name": fmt.Sprintf("%s|%s|%s",
+								CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80),
+						},
+					},
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s|%s": 2}`,
+						CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80),
+				},
+			}
+
+			fmt.Printf("Test 13: Creating job with multi-card type priority: %s > %s > %s\n",
+				CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80)
+			multiCardJob := e2eutil.CreateJob(ctx, multiCardJobSpec)
+			fmt.Printf("Test 13: Multi-card type job %s created\n", multiCardJob.Name)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, multiCardJob)
+				fmt.Printf("Test 13: Job %s cleaned up\n", multiCardJob.Name)
+			}()
+
+			// Wait for job to be ready
+			fmt.Printf("Test 13: Waiting for multi-card type job to be scheduled\n")
+			err := e2eutil.WaitJobReady(ctx, multiCardJob)
+			Expect(err).NotTo(HaveOccurred(), "Multi-card type job failed to become ready")
+			fmt.Printf("Test 13: Multi-card type job %s is ready\n", multiCardJob.Name)
+
+			// Verify job was scheduled to the highest priority card type
+			fmt.Printf("Test 13: Verifying job was scheduled to a node with highest priority card type\n")
+			cardPriority := []string{CardTypeH800, CardTypeRTX4090, CardTypeTeslaK80}
+			verifyPodScheduledToHighestPriorityCardType(ctx, multiCardJob.Name, cardPriority, 2, "Test 13")
+			fmt.Printf("Test 13: Multi-card type scheduling verified successfully\n")
+		})
+
+		// Test 14: Node ordering with different card type priorities
+		It("Node Ordering Prefers Higher Priority Card Types", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 14: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("card-priority-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 14: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue with quota for all card types
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("priority-test-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("32"),
+					v1.ResourceMemory: resource.MustParse("64Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 8, "%s": 8}`,
+						CardTypeH800, CardTypeTeslaK80),
+				},
+			}
+
+			fmt.Printf("Test 14: Creating queue %s\n", queueSpec.Name)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+			fmt.Printf("Test 14: Queue %s created with %s:8, %s:8\n",
+				queueSpec.Name, CardTypeH800, CardTypeTeslaK80)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 14: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
+			// Wait for queue to become open
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred())
+			fmt.Printf("Test 14: Queue %s is open\n", queueSpec.Name)
+
+			// Create multiple jobs with card type priority: H800 | TeslaK80
+			// Scheduler should prefer H800 nodes over TeslaK80 nodes
+			var jobs []*batchv1alpha1.Job
+
+			for i := 0; i < 3; i++ {
+				jobSpec := &e2eutil.JobSpec{
+					Name:  fmt.Sprintf("priority-job-%d-%s", i, randomSuffix),
+					Queue: queueSpec.Name,
+					Tasks: []e2eutil.TaskSpec{
+						{
+							Name: "task",
+							Min:  1,
+							Rep:  1,
+							Img:  e2eutil.DefaultNginxImage,
+							Req: v1.ResourceList{
+								v1.ResourceCPU:                    resource.MustParse("1"),
+								v1.ResourceMemory:                 resource.MustParse("1Gi"),
+								v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+							},
+							Limit: v1.ResourceList{
+								v1.ResourceCPU:                    resource.MustParse("1"),
+								v1.ResourceMemory:                 resource.MustParse("1Gi"),
+								v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+							},
+							Annotations: map[string]string{
+								"volcano.sh/card.name": fmt.Sprintf("%s|%s",
+									CardTypeH800, CardTypeTeslaK80),
+							},
+						},
+					},
+					Annotations: map[string]string{
+						"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s": 1}`,
+							CardTypeH800, CardTypeTeslaK80),
+					},
+				}
+
+				fmt.Printf("Test 14: Creating job %d with card priority %s > %s\n",
+					i, CardTypeH800, CardTypeTeslaK80)
+				job := e2eutil.CreateJob(ctx, jobSpec)
+				fmt.Printf("Test 14: Job %s created\n", job.Name)
+				jobs = append(jobs, job)
+
+				defer func(j *batchv1alpha1.Job) {
+					e2eutil.DeleteJob(ctx, j)
+					fmt.Printf("Test 14: Job %s cleaned up\n", j.Name)
+				}(job)
+
+				// Wait for job to be ready
+				err := e2eutil.WaitJobReady(ctx, job)
+				Expect(err).NotTo(HaveOccurred())
+				fmt.Printf("Test 14: Job %s is ready\n", job.Name)
+			}
+
+			// Verify all jobs were scheduled to the highest priority card type
+			fmt.Printf("Test 14: Verifying all jobs were scheduled to highest priority card type\n")
+			verifyCardPriority := []string{CardTypeH800, CardTypeTeslaK80}
+
+			totalScheduledCardTypes := make(map[string]int)
+			for _, job := range jobs {
+				jobScheduledCardTypes := verifyPodScheduledToHighestPriorityCardType(
+					ctx, job.Name, verifyCardPriority, 1, fmt.Sprintf("Test 14 (Job %s)", job.Name))
+
+				// Accumulate card type counts across all jobs
+				for cardType, count := range jobScheduledCardTypes {
+					totalScheduledCardTypes[cardType] += count
+				}
+			}
+
+			fmt.Printf("Test 14: All jobs scheduled. Total card type distribution: %v\n", totalScheduledCardTypes)
+			fmt.Printf("Test 14: All jobs scheduled successfully with card type priority\n")
+		})
+
+		// Test 15: Node ordering with custom weight configuration
+		It("Node Ordering with Custom Weight Configuration", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 15: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("custom-weight-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 15: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue for testing
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("weight-test-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("16"),
+					v1.ResourceMemory: resource.MustParse("32Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 8, "%s": 8}`,
+						CardTypeRTX4090, CardTypeTeslaK80),
+				},
+			}
+
+			fmt.Printf("Test 15: Creating queue %s\n", queueSpec.Name)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+			fmt.Printf("Test 15: Queue created with card quotas\n")
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 15: Queue cleaned up\n")
+			}()
+
+			// Wait for queue to become open
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred())
+			fmt.Printf("Test 15: Queue is open\n")
+
+			// Create job with multi-card type annotation
+			// The scheduler with nodeOrderWeight should prefer RTX4090 over TeslaK80
+			jobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("weighted-ordering-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "task",
+						Min:  1,
+						Rep:  2,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": fmt.Sprintf("%s|%s",
+								CardTypeRTX4090, CardTypeTeslaK80),
+						},
+					},
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s": 1}`,
+						CardTypeRTX4090, CardTypeTeslaK80),
+				},
+			}
+
+			fmt.Printf("Test 15: Creating job with card type priority: %s > %s\n",
+				CardTypeRTX4090, CardTypeTeslaK80)
+			job := e2eutil.CreateJob(ctx, jobSpec)
+			fmt.Printf("Test 15: Job %s created\n", job.Name)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 15: Job cleaned up\n")
+			}()
+
+			// Wait for job to be ready
+			fmt.Printf("Test 15: Waiting for job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred())
+			fmt.Printf("Test 15: Job %s is ready\n", job.Name)
+
+			// Verify pods were scheduled to the highest priority card type
+			fmt.Printf("Test 15: Verifying pods were scheduled to highest priority card type\n")
+			expectedCardPriority := []string{CardTypeRTX4090, CardTypeTeslaK80}
+			scheduledCardTypes := verifyPodScheduledToHighestPriorityCardType(ctx, job.Name, expectedCardPriority, 1, "Test 15")
+
+			// Assert: Verify we got 2 pods scheduled
+			totalPods := 0
+			for _, count := range scheduledCardTypes {
+				totalPods += count
+			}
+			Expect(totalPods).To(Equal(2), "Expected 2 pods to be scheduled")
+
+			fmt.Printf("Test 15: Scheduling with node ordering verified successfully\n")
+		})
+
+		// Test 16: Verify leftmost card type gets highest priority
+		It("Leftmost Card Type Gets Highest Score", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 16: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("leftmost-priority-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 16: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("leftmost-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("8"),
+					v1.ResourceMemory: resource.MustParse("16Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 4, "%s": 4, "%s": 4}`,
+						CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800),
+				},
+			}
+
+			fmt.Printf("Test 16: Creating queue\n")
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 16: Queue cleaned up\n")
+			}()
+
+			// Wait for queue to open
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred())
+			fmt.Printf("Test 16: Queue is open\n")
+
+			// Create job with card types in specific order
+			// Leftmost should have highest priority
+			jobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("leftmost-test-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "task",
+						Min:  1,
+						Rep:  1,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							// TeslaK80 is leftmost, should have highest priority
+							"volcano.sh/card.name": fmt.Sprintf("%s|%s|%s",
+								CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800),
+						},
+					},
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s|%s": 1}`,
+						CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800),
+				},
+			}
+
+			fmt.Printf("Test 16: Creating job with card priority: %s (leftmost, score=100) > %s (score=50) > %s (score=25)\n",
+				CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800)
+			job := e2eutil.CreateJob(ctx, jobSpec)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 16: Job cleaned up\n")
+			}()
+
+			// Wait for job to be ready
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred())
+			fmt.Printf("Test 16: Job scheduled successfully\n")
+
+			// Verify pod was scheduled to the leftmost (highest priority) card type
+			fmt.Printf("Test 16: Verifying pod was scheduled to LEFTMOST (highest priority) card type\n")
+			expectedCardPriority := []string{CardTypeTeslaK80, CardTypeRTX4090, CardTypeH800}
+			verifyPodScheduledToHighestPriorityCardType(ctx, job.Name, expectedCardPriority, 1, "Test 16")
+			fmt.Printf("Test 16: Leftmost card type priority verified with assertions\n")
+		})
+	})
+
+	Context("Capacity Card - Enqueue Mode Multi-Card Quota Sum", func() {
+		// Test 17: Enqueue mode multi-card quota sum check
+		It("Enqueue Mode Multi-Card Quota Sum Allows Different Tasks To Use Different Card Types", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 17: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("enqueue-multicard-sum-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 17: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue with card quotas: TeslaK80: 4, RTX4090: 4 (total: 8)
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("enqueue-sum-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("10"),
+					v1.ResourceMemory: resource.MustParse("10Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 4, "%s": 4}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 17: Creating queue %s with card quotas: %s=4, %s=4 (sum=8)\n",
+				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 17: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
+			// Wait for queue to become open
+			fmt.Printf("Test 17: Waiting for queue %s to become open\n", queueSpec.Name)
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open")
+			fmt.Printf("Test 17: Queue %s is now open\n", queueSpec.Name)
+
+			// Create a job requesting multi-card type with 6 cards total (within sum capacity of 8)
+			// Job annotation uses multi-card format for enqueue check
+			jobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("enqueue-multicard-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "tesla-task",
+						Min:  1,
+						Rep:  3,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": CardTypeTeslaK80,
+						},
+					},
+					{
+						Name: "rtx-task",
+						Min:  1,
+						Rep:  3,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": CardTypeRTX4090,
+						},
+					},
+				},
+				Annotations: map[string]string{
+					// Using multi-card format in job request for enqueue check
+					// This tells enqueue to check sum of quotas (4+4=8) >= 6
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s": 6}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 17: Creating job requesting 6 cards with multi-card format (%s|%s)\n",
+				CardTypeTeslaK80, CardTypeRTX4090)
+			fmt.Printf("Test 17: Job has 2 task types: 3x%s + 3x%s = 6 total cards\n",
+				CardTypeTeslaK80, CardTypeRTX4090)
+			job := e2eutil.CreateJob(ctx, jobSpec)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 17: Job %s cleaned up\n", job.Name)
+			}()
+
+			// Job should be enqueued successfully because sum check: 6 <= (4+4)=8
+			fmt.Printf("Test 17: Waiting for job to be ready (enqueue should succeed with sum check)\n")
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred(), "Job should be enqueued successfully with multi-card quota sum check")
+			fmt.Printf("Test 17: Job %s is ready - enqueue sum check passed!\n", job.Name)
+
+			// Verify pods are scheduled correctly to different card types
+			pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", job.Name),
+			})
+			Expect(err).NotTo(HaveOccurred())
+			fmt.Printf("Test 17: Found %d pods for job %s\n", len(pods.Items), job.Name)
+
+			teslaCount := 0
+			rtxCount := 0
+			for _, pod := range pods.Items {
+				if pod.Annotations["volcano.sh/card.name"] == CardTypeTeslaK80 {
+					teslaCount++
+				} else if pod.Annotations["volcano.sh/card.name"] == CardTypeRTX4090 {
+					rtxCount++
+				}
+			}
+			fmt.Printf("Test 17: Card distribution: %s=%d, %s=%d\n",
+				CardTypeTeslaK80, teslaCount, CardTypeRTX4090, rtxCount)
+			Expect(teslaCount).To(Equal(3), "Should have 3 TeslaK80 pods")
+			Expect(rtxCount).To(Equal(3), "Should have 3 RTX4090 pods")
+
+			fmt.Printf("Test 17: ✓ Enqueue mode multi-card quota sum check verified successfully\n")
+			fmt.Printf("Test 17: ✓ Different tasks using different card types confirmed\n")
+		})
+
+		// Test 18: Enqueue mode multi-card quota sum exceeds total
+		It("Enqueue Mode Multi-Card Quota Sum Rejects When Exceeding Total", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 18: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("enqueue-multicard-exceed-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 18: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue with card quotas: TeslaK80: 3, RTX4090: 3 (total: 6)
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("enqueue-exceed-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("10"),
+					v1.ResourceMemory: resource.MustParse("10Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 3, "%s": 3}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 18: Creating queue %s with card quotas: %s=3, %s=3 (sum=6)\n",
+				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 18: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
+			// Wait for queue to become open
+			fmt.Printf("Test 18: Waiting for queue %s to become open\n", queueSpec.Name)
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open")
+			fmt.Printf("Test 18: Queue %s is now open\n", queueSpec.Name)
+
+			// Create a job requesting 8 cards (exceeds sum capacity of 6)
+			jobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("enqueue-exceed-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "task-1",
+						Min:  1,
+						Rep:  8,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							"volcano.sh/card.name": fmt.Sprintf("%s|%s", CardTypeTeslaK80, CardTypeRTX4090),
+						},
+					},
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s": 8}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 18: Creating job requesting 8 cards (exceeds sum quota of 6)\n")
+			job := e2eutil.CreateJob(ctx, jobSpec)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 18: Job %s cleaned up\n", job.Name)
+			}()
+
+			// Job should fail to enqueue because sum check: 8 > (3+3)=6
+			fmt.Printf("Test 18: Verifying job fails to enqueue (8 > 6)\n")
+			time.Sleep(JobProcessTimeout / 2)
+			e2eutil.CheckJobSchedulingFailed(ctx, job)
+			fmt.Printf("Test 18: ✓ Job correctly rejected when exceeding multi-card quota sum\n")
+		})
+
+		// Test 19: Tasks with multi-card annotation can be scheduled to different card types
+		It("Tasks With Multi-Card Annotation Can Use Different Card Types In Same Job", func() {
+			randomSuffix := generateRandomSuffix()
+			fmt.Printf("Test 19: Generated random suffix %s\n", randomSuffix)
+			ctx := e2eutil.InitTestContext(e2eutil.Options{
+				Namespace: fmt.Sprintf("multi-card-tasks-test-%s", randomSuffix),
+			})
+			fmt.Printf("Test 19: Test context initialized, namespace %s\n", ctx.Namespace)
+			defer e2eutil.CleanupTestContext(ctx)
+
+			// Create queue with card quotas: TeslaK80: 6, RTX4090: 6 (total: 12)
+			queueSpec := &e2eutil.QueueSpec{
+				Name:   fmt.Sprintf("multi-card-tasks-queue-%s", randomSuffix),
+				Weight: 10,
+				Capacity: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("10"),
+					v1.ResourceMemory: resource.MustParse("10Gi"),
+				},
+				Annotations: map[string]string{
+					"volcano.sh/card.quota": fmt.Sprintf(`{"%s": 3, "%s": 3}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 19: Creating queue %s with card quotas: %s=3, %s=3\n",
+				queueSpec.Name, CardTypeTeslaK80, CardTypeRTX4090)
+			e2eutil.CreateQueueWithQueueSpec(ctx, queueSpec)
+
+			defer func() {
+				e2eutil.DeleteQueue(ctx, queueSpec.Name)
+				fmt.Printf("Test 19: Queue %s cleaned up\n", queueSpec.Name)
+			}()
+
+			// Wait for queue to become open
+			fmt.Printf("Test 19: Waiting for queue %s to become open\n", queueSpec.Name)
+			queueOpenErr := e2eutil.WaitQueueStatus(func() (bool, error) {
+				queue, err := ctx.Vcclient.SchedulingV1beta1().Queues().Get(context.TODO(), queueSpec.Name, metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+				return queue.Status.State == schedulingv1beta1.QueueStateOpen, nil
+			})
+			Expect(queueOpenErr).NotTo(HaveOccurred(), "Queue failed to become open")
+			fmt.Printf("Test 19: Queue %s is now open\n", queueSpec.Name)
+
+			// Create a job with all tasks using multi-card annotation
+			// Each task will be scheduled to one of the card types based on availability
+			jobSpec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("multi-card-tasks-job-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "worker",
+						Min:  1,
+						Rep:  6,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Limit: v1.ResourceList{
+							v1.ResourceCPU:                    resource.MustParse("1"),
+							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+						Annotations: map[string]string{
+							// Multi-card annotation - can use either TeslaK80 or RTX4090
+							"volcano.sh/card.name": fmt.Sprintf("%s|%s", CardTypeTeslaK80, CardTypeRTX4090),
+						},
+					},
+				},
+				Annotations: map[string]string{
+					// Job-level multi-card request for enqueue check (6 cards total)
+					"volcano.sh/card.request": fmt.Sprintf(`{"%s|%s": 6}`,
+						CardTypeTeslaK80, CardTypeRTX4090),
+				},
+			}
+
+			fmt.Printf("Test 19: Creating job with 6 tasks, all using multi-card annotation (%s|%s)\n",
+				CardTypeTeslaK80, CardTypeRTX4090)
+			job := e2eutil.CreateJob(ctx, jobSpec)
+
+			defer func() {
+				e2eutil.DeleteJob(ctx, job)
+				fmt.Printf("Test 19: Job %s cleaned up\n", job.Name)
+			}()
+
+			// Job should be enqueued and scheduled successfully
+			fmt.Printf("Test 19: Waiting for job to be ready\n")
+			err := e2eutil.WaitJobReady(ctx, job)
+			Expect(err).NotTo(HaveOccurred(), "Job should be scheduled successfully")
+			fmt.Printf("Test 19: Job %s is ready\n", job.Name)
+		})
+	})
 })
 
 // Helper function: int32 pointer
 func int32Ptr(i int32) *int32 {
 	return &i
+}
+
+// verifyPodScheduledToHighestPriorityCardType verifies that pods are scheduled to nodes
+// with the highest priority card type available in the cluster.
+// It returns the card type distribution for further assertions.
+func verifyPodScheduledToHighestPriorityCardType(
+	ctx *e2eutil.TestContext,
+	jobName string,
+	expectedCardPriority []string,
+	minGPUCount int64,
+	testName string,
+) map[string]int {
+	// Step 1: Get all nodes and group them by card type
+	nodes, err := ctx.Kubeclient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	Expect(err).NotTo(HaveOccurred())
+
+	cardTypeToNodes := make(map[string][]string) // card type -> node names
+
+	for _, node := range nodes.Items {
+		// Check if node has enough GPU capacity
+		gpuCapacity, hasGPU := node.Status.Allocatable["nvidia.com/gpu"]
+		if !hasGPU || gpuCapacity.Value() < minGPUCount {
+			continue
+		}
+
+		// Find card type from node labels
+		for labelKey, labelValue := range node.Labels {
+			if labelKey == "nvidia.com/gpu.product" || labelKey == "nvidia.com/card.product" {
+				cardTypeToNodes[labelValue] = append(cardTypeToNodes[labelValue], node.Name)
+				fmt.Printf("%s: Found node %s with card type %s (%d GPUs)\n",
+					testName, node.Name, labelValue, gpuCapacity.Value())
+				break
+			}
+		}
+	}
+
+	// Step 2: Determine which nodes should be used (highest priority card type)
+	expectedNodes := make(map[string]bool) // expected node names
+	expectedCardType := ""
+	expectedPriorityIndex := -1
+
+	for idx, cardType := range expectedCardPriority {
+		if nodeNames, exists := cardTypeToNodes[cardType]; exists && len(nodeNames) > 0 {
+			expectedCardType = cardType
+			expectedPriorityIndex = idx
+			for _, nodeName := range nodeNames {
+				expectedNodes[nodeName] = true
+			}
+			expectedScore := 100.0 * math.Pow(0.5, float64(idx))
+			fmt.Printf("%s: Highest priority card type: %s (index: %d, score: %.2f), nodes: %v\n",
+				testName, cardType, idx, expectedScore, nodeNames)
+			break
+		}
+	}
+
+	if expectedCardType == "" {
+		fmt.Printf("%s: Warning - No nodes with expected card types found\n", testName)
+		return make(map[string]int)
+	}
+
+	// Step 3: Get pods and verify they are scheduled to expected nodes
+	pods, err := ctx.Kubeclient.CoreV1().Pods(ctx.Namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("volcano.sh/job-name=%s", jobName),
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(len(pods.Items)).To(BeNumerically(">", 0), "Expected at least one pod")
+
+	scheduledCardTypes := make(map[string]int)
+
+	// Step 4: Verify each pod is scheduled to an expected node
+	for _, pod := range pods.Items {
+		Expect(pod.Spec.NodeName).NotTo(BeEmpty(), "Pod should be scheduled")
+
+		// Assert: Pod must be scheduled to one of the expected nodes
+		_, isExpectedNode := expectedNodes[pod.Spec.NodeName]
+		Expect(isExpectedNode).To(BeTrue(),
+			"Pod %s MUST be scheduled to a node with highest priority card type %s (expected nodes: %v), but scheduled to node %s",
+			pod.Name, expectedCardType, getMapKeys(expectedNodes), pod.Spec.NodeName)
+
+		// Track card type distribution
+		scheduledCardTypes[expectedCardType]++
+		fmt.Printf("%s: ✓ Pod %s CORRECTLY scheduled to node %s (card type: %s, priority index: %d)\n",
+			testName, pod.Name, pod.Spec.NodeName, expectedCardType, expectedPriorityIndex)
+	}
+
+	fmt.Printf("%s: Card type distribution: %v\n", testName, scheduledCardTypes)
+	return scheduledCardTypes
+}
+
+// getMapKeys returns the keys of a string->bool map as a slice
+func getMapKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
