@@ -303,6 +303,12 @@ Card resources are stored as scalar resources in milli-units (multiplied by 1000
 
 #### Multi-Card Request Processing
 
+The plugin supports two modes for multi-card request checking:
+
+##### Task Mode (Task-level Checking)
+
+For task allocation, the plugin checks if **any single card type** can satisfy the request, because each task must use only one card type:
+
 For a multi-card request like `A100|H100|V100`:
 
 1. Split by `|` separator
@@ -312,6 +318,29 @@ For a multi-card request like `A100|H100|V100`:
    - Check if `toBeUsedResource[cardType] <= queueCapability[cardType]`
    - If any card type passes, return success
 3. If all fail, return the error with the multi-card name
+
+##### Job Mode (Job-level Checking)
+
+For job enqueueing, the plugin checks if the **sum of all card type quotas** can satisfy the request, because different tasks in the same job can use different card types:
+
+For a multi-card request like `A100|H100`:
+
+1. Split by `|` separator
+2. Calculate the sum of available quotas across all card types:
+   - `totalAvailableQuota = queueCapability[A100] + queueCapability[H100]`
+3. Calculate the sum of resources to be used across all card types:
+   - `totalToBeUsed = toBeUsedResource[A100] + toBeUsedResource[H100] + requestedQuantity`
+4. Check if `totalToBeUsed <= totalAvailableQuota`
+5. If yes, return success; otherwise, return error
+
+**Example:**
+- Queue has: A100=5, H100=3 (total=8)
+- Already allocated: A100=2, H100=1 (total=3)
+- New job requests: `A100|H100` with 4 cards
+- Job mode check: (2+1+4) = 7 <= 8 ✓ Success
+- This allows the job's different tasks to potentially use 3 more A100s and 1 more H100
+
+This enhancement allows flexible job submissions where different tasks can use different card types, maximizing resource utilization.
 
 #### Event Recording
 
@@ -473,7 +502,10 @@ spec:
    - Support for multi-card selection syntax
    - Easier evolution without API changes
 
-4. **Multi-Card Scheduling**: The current implementation checks quota for multi-card requests but enforce that all tasks in a job use the same card type. Future enhancements may add more flexible controls.
+4. **Multi-Card Scheduling**: The plugin supports flexible multi-card scheduling:
+   - **Job mode** (enqueue phase): Checks the sum of multi-card quotas, allowing different tasks in the same job to use different card types
+   - **Task mode** (allocate phase): Ensures each individual task uses only one card type
+   - This provides optimal resource utilization while maintaining task-level constraints
 
 5. **Performance Considerations**: The plugin caches node card information to minimize overhead during scheduling cycles.
 
@@ -638,10 +670,56 @@ In this example:
 - Nodes with T4 get lower score (25 with default weight)
 - Volcano scheduler will prefer A100 nodes when available
 
+## Recent Enhancements
+
+### Multi-Card Job Mode (Implemented)
+
+The plugin now supports flexible multi-card scheduling at the job level:
+- **Job Mode**: When a job requests multi-card resources (e.g., `A100|H100`), the job-level check validates that the **sum of all card type quotas** can accommodate the job
+- This allows different tasks within the same job to use different card types
+- Each individual task still uses only one card type (enforced in task mode)
+- Maximizes resource utilization and scheduling flexibility
+
+**Example Use Case:**
+```yaml
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  annotations:
+    # Request 6 cards total, can use A100 or H100
+    volcano.sh/card.request: '{"A100|H100": 6}'
+spec:
+  tasks:
+    - name: training-task
+      replicas: 3
+      template:
+        metadata:
+          annotations:
+            volcano.sh/card.name: "A100"
+        spec:
+          containers:
+            - resources:
+                limits:
+                  nvidia.com/gpu: 1
+    - name: inference-task
+      replicas: 3
+      template:
+        metadata:
+          annotations:
+            volcano.sh/card.name: "H100"
+        spec:
+          containers:
+            - resources:
+                limits:
+                  nvidia.com/gpu: 1
+```
+
+In this example, if the queue has `A100: 4, H100: 4`, the job passes the job-level check because `6 <= (4+4)`. The 3 training tasks can use A100s while the 3 inference tasks use H100s.
+
 ## Future Work
 
-- Support different Pods in the same job using different kinds of cards
-- Support preemption and reclaim
+- Support preemption and reclaim for card resources
+- Support hierarchical queue card quota management
 
 ## References
 

@@ -169,10 +169,11 @@ func TestCheckSingleScalarResource(t *testing.T) {
 		scalarQuant      float64
 		toBeUsedResource *api.Resource
 		queueCapability  *api.Resource
+		mode             CheckMode
 		expectedResult   CheckSingleScalarResourceResult
 	}{
 		{
-			name:        "sufficient single card resource",
+			name:        "task mode: sufficient single card resource",
 			scalarName:  "NVIDIA-GTX-4090",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -185,6 +186,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-GTX-4090": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  3000,
@@ -192,7 +194,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "insufficient single card resource",
+			name:        "task mode: insufficient single card resource",
 			scalarName:  "NVIDIA-GTX-4090",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -205,6 +207,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-GTX-4090": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   false,
 				NoEnoughScalarName:   "NVIDIA-GTX-4090",
@@ -214,7 +217,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "multi-card request with first card sufficient",
+			name:        "task mode: multi-card request with first card sufficient",
 			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -230,6 +233,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-H200":     8000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  5000, // 3000 + 2000
@@ -237,7 +241,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "multi-card request with second card sufficient",
+			name:        "task mode: multi-card request with second card sufficient",
 			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -253,6 +257,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-H200":     8000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  5000, // 3000 + 2000
@@ -260,7 +265,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "multi-card request with all cards insufficient",
+			name:        "task mode: multi-card request with all cards insufficient",
 			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -276,6 +281,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-H200":     8000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                  false,
 				NoEnoughScalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
@@ -283,7 +289,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "zero scalar quantity request",
+			name:        "task mode: zero scalar quantity request",
 			scalarName:  "NVIDIA-GTX-4090",
 			scalarQuant: 0,
 			toBeUsedResource: &api.Resource{
@@ -296,6 +302,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-GTX-4090": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  6000,
@@ -303,7 +310,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "resource not in toBeUsedResource",
+			name:        "task mode: resource not in toBeUsedResource",
 			scalarName:  "NVIDIA-H200",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -314,6 +321,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-H200": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  0,
@@ -321,7 +329,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "resource not in queueCapability",
+			name:        "task mode: resource not in queueCapability",
 			scalarName:  "NVIDIA-H200",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -332,6 +340,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			queueCapability: &api.Resource{
 				ScalarResources: map[v1.ResourceName]float64{},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   false,
 				NoEnoughScalarName:   "NVIDIA-H200",
@@ -341,7 +350,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "boundary case - exactly at capacity",
+			name:        "task mode: boundary case - exactly at capacity",
 			scalarName:  "NVIDIA-GTX-4090",
 			scalarQuant: 2000,
 			toBeUsedResource: &api.Resource{
@@ -354,6 +363,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-GTX-4090": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   true,
 				ToBeUsedScalarQuant:  5000,
@@ -361,7 +371,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 			},
 		},
 		{
-			name:        "boundary case - one unit over capacity",
+			name:        "task mode: boundary case - one unit over capacity",
 			scalarName:  "NVIDIA-GTX-4090",
 			scalarQuant: 1,
 			toBeUsedResource: &api.Resource{
@@ -374,11 +384,158 @@ func TestCheckSingleScalarResource(t *testing.T) {
 					"NVIDIA-GTX-4090": 5000,
 				},
 			},
+			mode: CheckModeTask,
 			expectedResult: CheckSingleScalarResourceResult{
 				Ok:                   false,
 				NoEnoughScalarName:   "NVIDIA-GTX-4090",
 				NoEnoughScalarCount:  1,
 				ToBeUsedScalarQuant:  5001,
+				QueueCapabilityQuant: 5000,
+			},
+		},
+		// Job mode tests - checking sum of multi-card quotas
+		{
+			name:        "job mode: multi-card request with sum of quotas sufficient",
+			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
+			scalarQuant: 2000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090|NVIDIA-H200": 2000,
+					"NVIDIA-GTX-4090":             4000,
+					"NVIDIA-H200":                 3000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 5000,
+					"NVIDIA-H200":     4000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   true,
+				ToBeUsedScalarQuant:  9000, // 4000 + 3000 + 2000
+				QueueCapabilityQuant: 9000, // 5000 + 4000
+			},
+		},
+		{
+			name:        "job mode: multi-card request with sum of quotas insufficient",
+			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
+			scalarQuant: 3000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090|NVIDIA-H200": 3000,
+					"NVIDIA-GTX-4090":             4000,
+					"NVIDIA-H200":                 3000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 5000,
+					"NVIDIA-H200":     4000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   false,
+				NoEnoughScalarName:   "NVIDIA-GTX-4090|NVIDIA-H200",
+				NoEnoughScalarCount:  3000,
+				ToBeUsedScalarQuant:  10000, // 4000 + 3000 + 3000
+				QueueCapabilityQuant: 9000,  // 5000 + 4000
+			},
+		},
+		{
+			name:        "job mode: multi-card request with one card at 0, sum sufficient",
+			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
+			scalarQuant: 2000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090|NVIDIA-H200": 2000,
+					"NVIDIA-GTX-4090":             0,
+					"NVIDIA-H200":                 3000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 5000,
+					"NVIDIA-H200":     4000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   true,
+				ToBeUsedScalarQuant:  5000, // 0 + 3000 + 2000
+				QueueCapabilityQuant: 9000, // 5000 + 4000
+			},
+		},
+		{
+			name:        "job mode: multi-card request with three cards, sum sufficient",
+			scalarName:  "NVIDIA-A100|NVIDIA-H100|NVIDIA-H200",
+			scalarQuant: 2000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-A100|NVIDIA-H100|NVIDIA-H200": 2000,
+					"NVIDIA-A100":                         3000,
+					"NVIDIA-H100":                         2000,
+					"NVIDIA-H200":                         1000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-A100": 4000,
+					"NVIDIA-H100": 3000,
+					"NVIDIA-H200": 2000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   true,
+				ToBeUsedScalarQuant:  8000, // 3000 + 2000 + 1000 + 2000
+				QueueCapabilityQuant: 9000, // 4000 + 3000 + 2000
+			},
+		},
+		{
+			name:        "job mode: multi-card request exactly at sum capacity",
+			scalarName:  "NVIDIA-GTX-4090|NVIDIA-H200",
+			scalarQuant: 2000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090|NVIDIA-H200": 2000,
+					"NVIDIA-GTX-4090":             4000,
+					"NVIDIA-H200":                 3000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 5000,
+					"NVIDIA-H200":     4000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   true,
+				ToBeUsedScalarQuant:  9000, // 4000 + 3000 + 2000
+				QueueCapabilityQuant: 9000, // 5000 + 4000
+			},
+		},
+		{
+			name:        "job mode: single card (not multi-card)",
+			scalarName:  "NVIDIA-GTX-4090",
+			scalarQuant: 2000,
+			toBeUsedResource: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 3000,
+				},
+			},
+			queueCapability: &api.Resource{
+				ScalarResources: map[v1.ResourceName]float64{
+					"NVIDIA-GTX-4090": 5000,
+				},
+			},
+			mode: CheckModeJob,
+			expectedResult: CheckSingleScalarResourceResult{
+				Ok:                   true,
+				ToBeUsedScalarQuant:  3000,
 				QueueCapabilityQuant: 5000,
 			},
 		},
@@ -391,6 +548,7 @@ func TestCheckSingleScalarResource(t *testing.T) {
 				tt.scalarQuant,
 				tt.toBeUsedResource,
 				tt.queueCapability,
+				tt.mode,
 			)
 
 			if result.Ok != tt.expectedResult.Ok {
