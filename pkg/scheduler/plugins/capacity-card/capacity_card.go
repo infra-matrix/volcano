@@ -72,6 +72,20 @@ const (
 
 	// cardUnlimitedCpuMemory is the plugin config name of card-unlimited cpu memory.
 	cardUnlimitedCpuMemory = "cardUnlimitedCpuMemory"
+
+	// nodeOrderWeight is the plugin config name for node order weight when multi-card types are present.
+	// This weight is multiplied with the final node score.
+	// Default value is 1.0 (no scaling). Can be any positive number.
+	// Higher values increase the importance of card type priority in overall scheduling decisions.
+	nodeOrderWeight = "nodeOrderWeight"
+
+	// defaultNodeOrderWeight is the default weight for node order scoring.
+	defaultNodeOrderWeight = 1.0
+
+	// nodeOrderDecayRate is the fixed decay rate for calculating base scores.
+	// Each subsequent card type gets this factor applied: score = maxScore * (decayRate ^ index)
+	// Using 0.5 means: 1st card=100, 2nd card=50, 3rd card=25, etc.
+	nodeOrderDecayRate = 0.5
 )
 
 // Plugin implements the capacity plugin.
@@ -83,6 +97,7 @@ type Plugin struct {
 	nodeCardInfos            map[string]NodeCardResourceInfo
 	cardNameToResourceName   map[corev1.ResourceName]corev1.ResourceName
 	isCardUnlimitedCpuMemory bool
+	nodeOrderWeight          float64
 }
 
 // New return capacity plugin.
@@ -117,6 +132,9 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 
 	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
 	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
+
+	p.nodeOrderWeight = p.GetNodeOrderWeight(ssn)
+	klog.V(4).Infof("NodeOrderWeight: %v", p.nodeOrderWeight)
 
 	// Job enqueueable check.
 	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
@@ -155,6 +173,9 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	})
 
 	// TODO: add AddNodeOrderFn for job using multi-card resources. To support card selection by order.
+	ssn.AddNodeOrderFn(p.Name(), func(task *api.TaskInfo, node *api.NodeInfo) (float64, error) {
+		return p.NodeOrderFn(task, node)
+	})
 }
 
 // OnSessionClose cleans up the plugin state.
@@ -185,6 +206,46 @@ func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 		}
 	}
 	return false
+}
+
+// GetNodeOrderWeight gets the node order weight from plugin arguments.
+// The weight is multiplied with the final score. Must be positive.
+// Returns defaultNodeOrderWeight if not configured or invalid.
+func (p *Plugin) GetNodeOrderWeight(ssn *framework.Session) float64 {
+	for _, tier := range ssn.Tiers {
+		for _, plugin := range tier.Plugins {
+			if plugin.Name != PluginName {
+				continue
+			}
+			weightVal, ok := plugin.Arguments[nodeOrderWeight]
+			if !ok {
+				return defaultNodeOrderWeight
+			}
+
+			// Try float64 first
+			if weightFloat, ok := weightVal.(float64); ok {
+				if weightFloat > 0 {
+					return weightFloat
+				}
+				klog.Warningf("Invalid nodeOrderWeight value: %v, must be positive, using default: %v", weightFloat, defaultNodeOrderWeight)
+				return defaultNodeOrderWeight
+			}
+
+			// Try int as fallback (in case config uses integer)
+			if weightInt, ok := weightVal.(int); ok {
+				weightFloat := float64(weightInt)
+				if weightFloat > 0 {
+					return weightFloat
+				}
+				klog.Warningf("Invalid nodeOrderWeight value: %v, must be positive, using default: %v", weightFloat, defaultNodeOrderWeight)
+				return defaultNodeOrderWeight
+			}
+
+			klog.Warningf("Invalid nodeOrderWeight type: %T, using default: %v", weightVal, defaultNodeOrderWeight)
+			return defaultNodeOrderWeight
+		}
+	}
+	return defaultNodeOrderWeight
 }
 
 // HasCardResource checks whether the job has card resource.

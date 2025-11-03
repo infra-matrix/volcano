@@ -477,9 +477,169 @@ spec:
 
 5. **Performance Considerations**: The plugin caches node card information to minimize overhead during scheduling cycles.
 
+## Node Ordering for Multi-Card Type Tasks
+
+### Overview
+
+The `capacity-card` plugin supports node ordering for tasks with multiple card type options. When a task specifies multiple acceptable card types (separated by `|`), nodes providing higher-priority card types receive higher scores.
+
+### Configuration
+
+#### nodeOrderWeight
+
+The `nodeOrderWeight` parameter is a multiplier applied to the final node score. This allows you to control the overall importance of card type priority in scheduling decisions.
+
+**Format:**
+```yaml
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Scheduler
+spec:
+  plugins:
+    - name: capacity-card
+      arguments:
+        nodeOrderWeight: 1.0  # Must be positive
+```
+
+**Default:** `1.0` (no scaling)
+
+**Valid Range:** Any positive number `> 0`
+
+### Scoring Algorithm
+
+The score for a node is calculated in two steps:
+
+```
+baseScore = 100 * (0.5 ^ index)
+finalScore = baseScore * nodeOrderWeight
+```
+
+Where:
+- `index` is the position of the matched card type (0-based, 0 is highest priority)
+- `0.5` is the fixed decay rate (each subsequent card type gets 50% less base score)
+- `nodeOrderWeight` is the configurable multiplier
+
+### Examples
+
+#### Example 1: Default Weight (1.0)
+
+Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
+
+**Scores:**
+- Node with NVIDIA-A100: `100 * 0.5^0 * 1.0 = 100`
+- Node with NVIDIA-H100: `100 * 0.5^1 * 1.0 = 50`
+- Node with NVIDIA-T4: `100 * 0.5^2 * 1.0 = 25`
+
+#### Example 2: Increased Importance (2.0)
+
+Configuration:
+```yaml
+nodeOrderWeight: 2.0
+```
+
+Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
+
+**Scores:**
+- Node with NVIDIA-A100: `100 * 0.5^0 * 2.0 = 200`
+- Node with NVIDIA-H100: `100 * 0.5^1 * 2.0 = 100`
+- Node with NVIDIA-T4: `100 * 0.5^2 * 2.0 = 50`
+
+This makes card type priority more important relative to other scheduling factors (like resource utilization).
+
+#### Example 3: Decreased Importance (0.5)
+
+Configuration:
+```yaml
+nodeOrderWeight: 0.5
+```
+
+Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
+
+**Scores:**
+- Node with NVIDIA-A100: `100 * 0.5^0 * 0.5 = 50`
+- Node with NVIDIA-H100: `100 * 0.5^1 * 0.5 = 25`
+- Node with NVIDIA-T4: `100 * 0.5^2 * 0.5 = 12.5`
+
+This makes card type priority less important, allowing other factors to have more influence.
+
+#### Example 4: Many Card Types (10+)
+
+Even the 10th card type has a non-zero score:
+
+Task annotation: `volcano.sh/card.name: "Card0|Card1|Card2|Card3|Card4|Card5|Card6|Card7|Card8|Card9"`
+
+**Base Scores (with weight=1.0):**
+- Card0: `100.00`
+- Card1: `50.00`
+- Card2: `25.00`
+- Card3: `12.50`
+- Card4: `6.25`
+- Card5: `3.13`
+- Card6: `1.56`
+- Card7: `0.78`
+- Card8: `0.39`
+- Card9: `0.20`
+
+Every card type receives a unique, non-zero score!
+
+### Choosing the Right Weight
+
+| Weight | Behavior | Use Case |
+|--------|----------|----------|
+| > 2.0 | High importance | Card type priority dominates scheduling decisions |
+| 1.0-2.0 | Moderate-high importance | Card type priority is important but balanced (default: 1.0) |
+| 0.5-1.0 | Moderate-low importance | Other factors (like utilization) are more important |
+| < 0.5 | Low importance | Card type priority has minimal influence |
+
+### Full Configuration Example
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: volcano-scheduler-configmap
+  namespace: volcano-system
+data:
+  volcano-scheduler.conf: |
+    actions: "enqueue, allocate, backfill"
+    tiers:
+    - plugins:
+      - name: capacity-card
+        arguments:
+          cardUnlimitedCpuMemory: false
+          nodeOrderWeight: 1.0
+      - name: priority
+      - name: gang
+      - name: conformance
+```
+
+### Task Annotation Example
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-card-task
+  annotations:
+    volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"
+spec:
+  schedulerName: volcano
+  containers:
+  - name: gpu-job
+    image: nvidia/cuda:11.0-base
+    resources:
+      limits:
+        nvidia.com/gpu: 2
+```
+
+In this example:
+- The task can use A100, H100, or T4 GPUs
+- Nodes with A100 get the highest score (100)
+- Nodes with H100 get medium score (50 with default weight)
+- Nodes with T4 get lower score (25 with default weight)
+- Volcano scheduler will prefer A100 nodes when available
+
 ## Future Work
 
-- Node-level card selection ordering function
 - Support different Pods in the same job using different kinds of cards
 - Support preemption and reclaim
 
