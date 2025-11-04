@@ -153,7 +153,25 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		},
 	})
 
+	// Preemptive function to decide whether the queue can reclaim resource from specified task.
+	ssn.AddPreemptiveFn(p.Name(), func(obj any, candidate any) bool {
+		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject preemptive decicion.",
+				p.Name(),
+			)
+			return false
+		}
+
+		var (
+			queue = obj.(*api.QueueInfo)
+			task  = candidate.(*api.TaskInfo)
+		)
+		return p.PreemptiveFn(queue, task)
+	})
+
 	// TODO: add AddNodeOrderFn for job using multi-card resources. To support card selection by order.
+
 }
 
 // OnSessionClose cleans up the plugin state.
