@@ -85,10 +85,14 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 		jobReqResource  = p.GetMinResources(job)
 		queueCapability = qAttr.capability
 		totalToBeUsed   = jobReqResource.Clone().
-				Add(qAttr.allocated).
-				Add(qAttr.inqueue).
-				Sub(qAttr.elastic)
+			Add(qAttr.allocated).
+			Add(qAttr.inqueue).
+			Sub(qAttr.elastic)
 	)
+	if p.overCommitFactor > 1 {
+		queueCapability = queueCapability.Clone().Multi(p.overCommitFactor)
+	}
+
 	klog.V(5).Infof(
 		"Job <%s/%s> min resource <%s>, queue %s capability <%s> allocated <%s> inqueue <%s> elastic <%s>",
 		job.Namespace, job.Name, jobReqResource.String(), qAttr.name,

@@ -25,33 +25,83 @@ package capacitycard
 import (
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/framework`
 	`volcano.sh/volcano/pkg/scheduler/plugins/util`
 )
 
+const (
+	serviceTypeAnnoKey = "volcano.sh/service.type"
+)
+
+type serviceType string
+
+const (
+	serviceTypeInference serviceType = "inference"
+	serviceTypeTraining  serviceType = "training"
+	serviceTypeUnknown   serviceType = "unknown"
+)
+
+// ReclaimableFn selects the reclaimable tasks under the capacity card plugin.
+// Polices:
+// 1. High priority inference services can preempt resources from lower priority training tasks.
+// 2. Lower or equal priority inference services cannot preempt resources from high priority training tasks.
+// 3. Training tasks cannot preempt each other, nor can they preempt resources from inference services.
+// 4. Inference services cannot preempt each other.
 func (p *Plugin) ReclaimableFn(
-	ssn *framework.Session, reclaimer *api.TaskInfo, reclaimees []*api.TaskInfo,
+	reclaimer *api.TaskInfo, reclaimees []*api.TaskInfo,
 ) ([]*api.TaskInfo, int) {
-	var victims []*api.TaskInfo
-	allocations := map[api.QueueID]*api.Resource{}
+	var (
+		victims              []*api.TaskInfo
+		reclaimerServiceType = p.getTaskServiceType(reclaimer)
+	)
+	// Training tasks cannot preempt each other, nor can they preempt resources from inference services.
+	if reclaimerServiceType == serviceTypeTraining {
+		return victims, util.Permit
+	}
 	for _, reclaimee := range reclaimees {
-		job := ssn.Jobs[reclaimee.Job]
-		attr := p.queueOpts[job.Queue]
-
-		if _, found := allocations[job.Queue]; !found {
-			allocations[job.Queue] = attr.allocated.Clone()
-		}
-		allocated := allocations[job.Queue]
-
-		exceptReclaimee := allocated.Clone().Sub(reclaimee.Resreq)
-		// When scalar resource not specified in deserved such as "pods", we should skip it and consider it as infinity,
-		// so the following first condition will be true and the current queue will not be reclaimed.
-		if allocated.LessEqual(attr.capability, api.Infinity) || !attr.guarantee.LessEqual(exceptReclaimee, api.Zero) {
+		reclaimeeServiceType := p.getTaskServiceType(reclaimee)
+		if reclaimeeServiceType == serviceTypeInference {
+			// Inference services cannot preempt each other.
 			continue
 		}
-		allocated.Sub(reclaimee.Resreq)
+
+		if reclaimeeServiceType == serviceTypeUnknown {
+			klog.V(4).Infof("unknown service type for reclaimee task: %s, skip it", reclaimee.Name)
+			continue
+		}
+
+		// Lower or equal priority inference services cannot preempt resources from high priority training tasks.
+		if reclaimer.Priority <= reclaimee.Priority {
+			continue
+		}
+
 		victims = append(victims, reclaimee)
 	}
-	klog.V(4).Infof("Victims from capacity plugin, victims=%+v reclaimer=%s", victims, reclaimer)
+	klog.V(4).Infof("reclaimer: %s, victims: %+v", reclaimer, victims)
 	return victims, util.Permit
+}
+
+func (p *Plugin) getTaskServiceType(ti *api.TaskInfo) serviceType {
+	if ti.Pod == nil {
+		return serviceTypeUnknown
+	}
+	st := ti.Pod.Annotations[serviceTypeAnnoKey]
+	if st != "" {
+		return serviceType(st)
+	}
+	if !p.allowServiceTypeByPodOwnerReferences {
+		return serviceTypeUnknown
+	}
+	if ti.Pod.OwnerReferences == nil || len(ti.Pod.OwnerReferences) == 0 {
+		return serviceTypeUnknown
+	}
+	switch ti.Pod.OwnerReferences[0].Kind {
+	case "Job":
+		return serviceTypeTraining
+
+	case "ReplicaSet":
+		return serviceTypeInference
+
+	default:
+		return serviceTypeUnknown
+	}
 }

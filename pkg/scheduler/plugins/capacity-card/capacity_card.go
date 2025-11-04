@@ -192,18 +192,31 @@ const (
 	// Each subsequent card type gets this factor applied: score = maxScore * (decayRate ^ index)
 	// Using 0.5 means: 1st card=100, 2nd card=50, 3rd card=25, etc.
 	nodeOrderDecayRate = 0.5
+
+	// serviceTypeByPodOwnerReferencesArg is the plugin config name for allowing service type inference by pod owner references.
+	serviceTypeByPodOwnerReferencesArg = "allowServiceTypeByPodOwnerReferences"
+
+	// overCommitFactorName is resource overCommit factor for enqueue action
+	// It determines the number of `pending` pods that the scheduler will tolerate
+	// when the resources capability of the queue is insufficient
+	overCommitFactorName = "overCommitFactor"
+
+	// defaultOverCommitFactor defines the default overCommit resource factor for enqueue action
+	defaultOverCommitFactor = 1.0
 )
 
 // Plugin implements the capacity plugin.
 type Plugin struct {
-	queueOpts                map[api.QueueID]*queueAttr
-	totalResource            *api.Resource
-	totalGuarantee           *api.Resource
-	nodeLister               v1.NodeLister
-	nodeCardInfos            map[string]NodeCardResourceInfo
-	cardNameToResourceName   map[corev1.ResourceName]corev1.ResourceName
-	isCardUnlimitedCpuMemory bool
-	nodeOrderWeight          float64
+	queueOpts                            map[api.QueueID]*queueAttr
+	totalResource                        *api.Resource
+	totalGuarantee                       *api.Resource
+	nodeLister                           v1.NodeLister
+	nodeCardInfos                        map[string]NodeCardResourceInfo
+	cardNameToResourceName               map[corev1.ResourceName]corev1.ResourceName
+	isCardUnlimitedCpuMemory             bool
+	allowServiceTypeByPodOwnerReferences bool
+	nodeOrderWeight                      float64
+	overCommitFactor                     float64
 }
 
 // New return capacity plugin.
@@ -236,11 +249,7 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
 
-	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
-	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
-
-	p.nodeOrderWeight = p.GetNodeOrderWeight(ssn)
-	klog.V(4).Infof("NodeOrderWeight: %v", p.nodeOrderWeight)
+	p.initArguments(ssn)
 
 	// Job enqueueable check.
 	ssn.AddJobEnqueueableFn(p.Name(), func(obj any) int {
@@ -278,7 +287,6 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		},
 	})
 
-
 	// Add AddNodeOrderFn for job using multi-card resources. To support card selection by order.
 	ssn.AddNodeOrderFn(p.Name(), func(task *api.TaskInfo, node *api.NodeInfo) (float64, error) {
 		return p.NodeOrderFn(task, node)
@@ -300,6 +308,18 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		)
 		return p.PreemptiveFn(queue, task)
 	})
+
+	// Reclaimable function to select reclaimable tasks for the reclaimer task.
+	ssn.AddReclaimableFn(p.Name(), func(reclaimer *api.TaskInfo, reclaimees []*api.TaskInfo) ([]*api.TaskInfo, int) {
+		if !readyToSchedule {
+			klog.V(2).Infof(
+				"Plugin <%s> is not ready to schedule, reject reclaimable decicion.",
+				p.Name(),
+			)
+			return []*api.TaskInfo{}, util.Reject
+		}
+		return p.ReclaimableFn(reclaimer, reclaimees)
+	})
 }
 
 // OnSessionClose cleans up the plugin state.
@@ -309,6 +329,20 @@ func (p *Plugin) OnSessionClose(_ *framework.Session) {
 	p.totalGuarantee = nil
 	p.nodeCardInfos = nil
 	p.cardNameToResourceName = nil
+}
+
+func (p *Plugin) initArguments(ssn *framework.Session) {
+	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
+	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
+
+	p.allowServiceTypeByPodOwnerReferences = p.ServiceTypeByPodOwnerReferences(ssn)
+	klog.V(4).Infof("ServiceTypeByPodOwnerReferences: %v", p.allowServiceTypeByPodOwnerReferences)
+
+	p.overCommitFactor = p.GetOverCommitFactor(ssn)
+	klog.V(4).Infof("OverCommitFactor: %v", p.overCommitFactor)
+
+	p.nodeOrderWeight = p.GetNodeOrderWeight(ssn)
+	klog.V(4).Infof("NodeOrderWeight: %v", p.nodeOrderWeight)
 }
 
 // IsCardUnlimitedCpuMemory checks if the card resource is unlimited cpu memory.
@@ -327,6 +361,27 @@ func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 				return false
 			}
 			return cardUnlimitedCpuMemoryBool
+		}
+	}
+	return false
+}
+
+// ServiceTypeByPodOwnerReferences checks if service type inference by pod owner references is allowed.
+func (p *Plugin) ServiceTypeByPodOwnerReferences(ssn *framework.Session) bool {
+	for _, tier := range ssn.Tiers {
+		for _, plugin := range tier.Plugins {
+			if plugin.Name != PluginName {
+				continue
+			}
+			allowValue, ok := plugin.Arguments[serviceTypeByPodOwnerReferencesArg]
+			if !ok {
+				return false
+			}
+			allow, ok := allowValue.(bool)
+			if !ok {
+				return false
+			}
+			return allow
 		}
 	}
 	return false
@@ -370,6 +425,33 @@ func (p *Plugin) GetNodeOrderWeight(ssn *framework.Session) float64 {
 		}
 	}
 	return defaultNodeOrderWeight
+}
+
+// GetOverCommitFactor gets the overCommit factor from plugin arguments.
+func (p *Plugin) GetOverCommitFactor(ssn *framework.Session) float64 {
+	for _, tier := range ssn.Tiers {
+		for _, plugin := range tier.Plugins {
+			if plugin.Name != PluginName {
+				continue
+			}
+			value, ok := plugin.Arguments[overCommitFactorName]
+			if !ok {
+				return defaultOverCommitFactor
+			}
+			if valueFloat64, ok := value.(float64); ok {
+				return valueFloat64
+			}
+			if valueInt, ok := value.(int); ok {
+				return float64(valueInt)
+			}
+			klog.Warningf(
+				"Invalid overCommitFactor value: %v, using default: %v",
+				value, defaultOverCommitFactor,
+			)
+			return defaultOverCommitFactor
+		}
+	}
+	return defaultOverCommitFactor
 }
 
 // HasCardResource checks whether the job has card resource.
