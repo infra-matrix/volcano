@@ -175,7 +175,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeUsed, queueCapability,
+			scalarName, scalarQuant, totalToBeUsed, queueCapability, CheckModeJob,
 		)
 		if checkResult.Ok {
 			continue
