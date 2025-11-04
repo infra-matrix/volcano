@@ -27,6 +27,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
+
 	"volcano.sh/apis/pkg/apis/scheduling"
 	"volcano.sh/volcano/pkg/scheduler/api"
 	"volcano.sh/volcano/pkg/scheduler/framework"
@@ -174,7 +175,7 @@ func (p *Plugin) isJobEnqueueable(ssn *framework.Session, qAttr *queueAttr, job 
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeUsed, queueCapability,
+			scalarName, scalarQuant, totalToBeUsed, queueCapability, CheckModeJob,
 		)
 		if checkResult.Ok {
 			continue

@@ -25,6 +25,7 @@ package capacitycard
 import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
+
 	"volcano.sh/apis/pkg/apis/scheduling"
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
@@ -140,7 +141,7 @@ func (p *Plugin) isTaskAllocatable(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeAllocated, queueCapability,
+			scalarName, scalarQuant, totalToBeAllocated, queueCapability, CheckModeTask,
 		)
 		if checkResult.Ok {
 			continue

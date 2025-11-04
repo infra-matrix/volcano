@@ -141,7 +141,7 @@ func (p *Plugin) canPreemptive(qAttr *queueAttr, ti *api.TaskInfo) bool {
 			continue
 		}
 		checkResult := CheckSingleScalarResource(
-			scalarName, scalarQuant, totalToBeAllocated, queueCapability,
+			scalarName, scalarQuant, totalToBeAllocated, queueCapability, CheckModeTask,
 		)
 		if checkResult.Ok {
 			continue

@@ -38,6 +38,13 @@ export KWOK_NODE_MEMORY=${KWOK_NODE_MEMORY:-8Gi}  # 8GB
 # pull images and load into kind cluster if PULL_IMAGES is true
 export PULL_IMAGES=${PULL_IMAGES:-false}
 
+# scheduler config
+if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
+  export VOLCANO_SCHEDULER_CONFIG="config/volcano-scheduler-capacity-card-ci.conf"
+else
+  export VOLCANO_SCHEDULER_CONFIG="config/volcano-scheduler-ci.conf"
+fi
+
 # create kwok node
 function create-kwok-node() {
   local node_index=$1
@@ -110,7 +117,7 @@ function install-volcano {
 basic:
   image_pull_policy: IfNotPresent
   image_tag_version: ${TAG}
-  scheduler_config_file: config/volcano-scheduler-ci.conf
+  scheduler_config_file: ${VOLCANO_SCHEDULER_CONFIG}
   crd_version: ${crd_version}
 
 custom:
@@ -156,7 +163,9 @@ function generate-log {
 function cleanup {
   uninstall-volcano
 
-  uninstall-gpu-operator
+  if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
+    uninstall-fake-gpu-operator
+  fi
 
   echo "Running kind: [kind delete cluster ${CLUSTER_CONTEXT[*]}]"
   kind delete cluster "${CLUSTER_CONTEXT[@]}"
@@ -193,7 +202,9 @@ if [[ -z ${KUBECONFIG+x} ]]; then
     export KUBECONFIG="${HOME}/.kube/config"
 fi
 
-install-fake-gpu-operator
+if [[ ${E2E_TYPE} == "CAPACITYCARD" ]]; then
+  install-fake-gpu-operator
+fi
 
 install-volcano
 
@@ -213,7 +224,6 @@ case ${E2E_TYPE} in
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/cronjob/
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress --focus="DRA E2E Test" ./test/e2e/dra/
     KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/hypernode/
-    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/capacitycard/
     ;;
 "JOBP")
     echo "Running parallel job e2e suite..."

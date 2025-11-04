@@ -29,6 +29,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	resourcehelper "k8s.io/kubectl/pkg/util/resource"
+
 	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
@@ -223,7 +224,7 @@ func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.
 		}, nil
 	}
 	return api.EmptyResource(), fmt.Errorf(
-		"no resource <%s> defined in reqests/limits for card <%s>",
+		"no resource <%s> defined in requests/limits for card <%s>",
 		cardResourceName, cardName,
 	)
 }
