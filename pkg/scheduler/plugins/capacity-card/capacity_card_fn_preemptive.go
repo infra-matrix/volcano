@@ -30,17 +30,17 @@ import (
 )
 
 // PreemptiveFn decides whether the queue can preempt resource for its task.
-func (p *Plugin) PreemptiveFn(queue *api.QueueInfo, task *api.TaskInfo) bool {
+func (p *Plugin) PreemptiveFn(queue *api.QueueInfo, reclaimer *api.TaskInfo) bool {
 	if queue.Queue.Status.State != scheduling.QueueStateOpen {
 		klog.V(3).Infof(
 			"Queue <%s> current state: %s, is not open state, can not reclaim for <%s>.",
-			queue.Name, queue.Queue.Status.State, task.Name,
+			queue.Name, queue.Queue.Status.State, reclaimer.Name,
 		)
 		return false
 	}
 	var (
 		qAttr         = p.queueOpts[queue.UID]
-		canPreemptive = p.canPreemptive(qAttr, task)
+		canPreemptive = p.canPreemptive(qAttr, reclaimer)
 	)
 	return canPreemptive
 }

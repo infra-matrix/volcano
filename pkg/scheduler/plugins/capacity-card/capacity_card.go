@@ -292,8 +292,8 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		return p.NodeOrderFn(task, node)
 	})
 
-	// Preemptive function to decide whether the queue can reclaim resource from specified task.
-	ssn.AddPreemptiveFn(p.Name(), func(obj any, candidate any) bool {
+	// Preemptive function to decide whether the queue can reclaim resource for specified task.
+	ssn.AddPreemptiveFn(p.Name(), func(queueObj any, reclaimer any) bool {
 		if !readyToSchedule {
 			klog.V(2).Infof(
 				"Plugin <%s> is not ready to schedule, reject preemptive decicion.",
@@ -303,8 +303,8 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 		}
 
 		var (
-			queue = obj.(*api.QueueInfo)
-			task  = candidate.(*api.TaskInfo)
+			queue = queueObj.(*api.QueueInfo)
+			task  = reclaimer.(*api.TaskInfo)
 		)
 		return p.PreemptiveFn(queue, task)
 	})
