@@ -1025,11 +1025,11 @@ var _ = Describe("Capacity Card E2E Test", func() {
 					{
 						Name: "cpu-task",
 						Min:  1,
-						Rep:  2,
+						Rep:  1,
 						Img:  e2eutil.DefaultNginxImage,
 						Req: v1.ResourceList{
-							v1.ResourceCPU:    resource.MustParse("2"),
-							v1.ResourceMemory: resource.MustParse("2Gi"),
+							v1.ResourceCPU:    resource.MustParse("1"),
+							v1.ResourceMemory: resource.MustParse("1Gi"),
 						},
 					},
 				},
@@ -1063,13 +1063,13 @@ var _ = Describe("Capacity Card E2E Test", func() {
 						Rep:  1,
 						Img:  e2eutil.DefaultNginxImage,
 						Req: v1.ResourceList{
-							v1.ResourceCPU:                    resource.MustParse("1"),
-							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceCPU:                    resource.MustParse("2"),
+							v1.ResourceMemory:                 resource.MustParse("2Gi"),
 							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("2"),
 						},
 						Limit: v1.ResourceList{
-							v1.ResourceCPU:                    resource.MustParse("1"),
-							v1.ResourceMemory:                 resource.MustParse("1Gi"),
+							v1.ResourceCPU:                    resource.MustParse("2"),
+							v1.ResourceMemory:                 resource.MustParse("2Gi"),
 							v1.ResourceName("nvidia.com/gpu"): resource.MustParse("2"),
 						},
 						Annotations: map[string]string{
@@ -1098,6 +1098,41 @@ var _ = Describe("Capacity Card E2E Test", func() {
 			err = e2eutil.WaitJobReady(ctx, cardJob)
 			Expect(err).NotTo(HaveOccurred(), "Job with card request failed to become ready within timeout")
 			fmt.Printf("Test 10: Job with card request %s is now ready\n", cardJob.Name)
+
+			// 3. Create a CPU-only job
+			cpuJob2Spec := &e2eutil.JobSpec{
+				Name:  fmt.Sprintf("cpu-only-job-2-%s", randomSuffix),
+				Queue: queueSpec.Name,
+				Tasks: []e2eutil.TaskSpec{
+					{
+						Name: "cpu-task-2",
+						Min:  1,
+						Rep:  1,
+						Img:  e2eutil.DefaultNginxImage,
+						Req: v1.ResourceList{
+							v1.ResourceCPU:    resource.MustParse("1"),
+							v1.ResourceMemory: resource.MustParse("1Gi"),
+						},
+					},
+				},
+			}
+
+			// Create CPU-only job
+			fmt.Printf("Test 10: Starting to create CPU-only job %s\n", cpuJob2Spec.Name)
+			cpuJob2 := e2eutil.CreateJob(ctx, cpuJob2Spec)
+			fmt.Printf("Test 10: CPU-only job 2 %s created successfully\n", cpuJob2.Name)
+
+			defer func() {
+				// Delete job
+				e2eutil.DeleteJob(ctx, cpuJob2)
+				fmt.Printf("Test 10: CPU-only job 2 %s cleaned up\n", cpuJob2.Name)
+			}()
+
+			// Wait for CPU-only job to be ready
+			fmt.Printf("Test 10: Waiting for CPU-only job 2 to be ready\n")
+			err = e2eutil.WaitJobReady(ctx, cpuJob2)
+			Expect(err).NotTo(HaveOccurred(), "CPU-only job 2 failed to become ready within timeout")
+			fmt.Printf("Test 10: CPU-only job 2 %s is now ready\n", cpuJob2.Name)
 
 			// 3. Create an excess CPU-only job
 			overCpuJobSpec := &e2eutil.JobSpec{
