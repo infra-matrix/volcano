@@ -224,6 +224,9 @@ func (p *Plugin) Name() string {
 
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
+	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
+	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
+
 	p.buildEventRecorder(ssn)
 	readyToSchedule := p.buildTotalResource(ssn)
 	if readyToSchedule {
@@ -235,9 +238,6 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 
 	klog.V(4).Infof("Total resource is: %v", p.totalResource)
 	klog.V(4).Infof("Total guarantee is: %v", p.totalGuarantee)
-
-	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
-	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
 
 	p.nodeOrderWeight = p.GetNodeOrderWeight(ssn)
 	klog.V(4).Infof("NodeOrderWeight: %v", p.nodeOrderWeight)
