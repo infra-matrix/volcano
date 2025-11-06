@@ -1,45 +1,20 @@
 # Capacity Card Scheduling Plugin
 
-@contributors
-
 ## Introduction
 
-The Capacity Card plugin is a Volcano scheduler plugin designed to provide fine-grained GPU/NPU/accelerator card resource management and scheduling capabilities in heterogeneous computing clusters. It extends Volcano's capacity scheduling capabilities to support various types of accelerator cards, including whole cards, MPS (Multi-Process Service) shared cards, MIG (Multi-Instance GPU) cards, and other shared card technologies.
+The Capacity Card plugin is a Volcano scheduler plugin designed to provide fine-grained management and scheduling capabilities for GPU/NPU/DCU and other accelerator card resources in heterogeneous computing clusters. It extends Volcano's capacity scheduling capabilities to support various types of accelerator cards, including whole cards, MPS (Multi-Process Service) shared cards, MIG (Multi-Instance GPU) cards, and other shared card technologies.
 
-As AI and HPC workloads increasingly rely on diverse GPU hardware (A100, H100, H200, V100, etc.), users need precise control over card resource allocation at the queue level while supporting flexible multi-card selection strategies for jobs.
+As AI and HPC workloads increasingly rely on diverse GPU hardware (A100, H100, H200, V100, etc.), users need precise control over card resource allocation at the queue level, while supporting flexible multi-card selection strategies for jobs.
 
 ## Motivation
 
-Current Kubernetes native resource management faces several limitations when dealing with heterogeneous GPU clusters:
+Current schedulers face several limitations when handling heterogeneous GPU clusters:
 
-1. **Lack of Fine-grained Card Type Management**: Standard Kubernetes resource requests cannot distinguish between different GPU card types (e.g., A100 vs V100) or different GPU sharing profiles (MPS, MIG etc.).
+1. **Lack of fine-grained card type quota management**: Standard GPU resource requests cannot differentiate between different card types. For example, card models like `NVIDIA-H200` and `NVIDIA-A800` all use the resource name `nvidia.com/gpu`. Current queue quotas only support card resource names and cannot implement card type configuration.
 
-2. **Insufficient Queue-level Card Quota Control**: Organizations need to allocate specific numbers of different card types to different teams/projects, which cannot be easily achieved with native Kubernetes resource quotas.
+2. **Lack of support for single-instance multi-card requirements**: Due to scarce GPU resources, to maximize utilization of existing GPU resources, online and offline instances (Pods) need to support single-instance multi-card model deployment. For example, when deploying a single instance, it needs to support simultaneous use of GPU models like `NVIDIA GPU 4090, 4090D, 5090`, deploying whichever GPU type has available resources.
 
-3. **Inflexible Multi-Card Selection**: Jobs often can run on multiple types of cards with similar capabilities, but Kubernetes lacks a mechanism to express "this job can use card type A OR card type B".
-
-The Capacity Card plugin addresses these challenges by providing:
-- Annotation-based card resource specification for queues and jobs
-- Support for multiple card types and sharing modes
-- Multi-card selection capability (e.g., "use A100 or H100")
-- Integration with Volcano's capacity scheduling framework
-
-## In Scope
-
-- Fine-grained card resource quota management at the queue level
-- Job-level card resource request validation before enqueueing
-- Task-level card name specification and allocation validation
-- Support for MPS (Multi-Process Service) shared GPU resources
-- Support for MIG (Multi-Instance GPU) shared GPU resources
-- Support for whole card and mixed card/shared resource scenarios
-- Multi-card selection support (allowing tasks to specify multiple acceptable card types)
-- Automatic card resource discovery from node labels
-- CPU/Memory unlimited mode for card resources (optional)
-
-## Out of Scope
-
-- Hierarchical queue card quota management
-- Preemption and reclaim are not supported for now
+3. **CPU/memory coupled with GPU resources**: For GPU servers, GPU is the bottleneck, so there's no need to limit CPU/memory. CPU/memory quotas should only apply to non-GPU servers.
 
 ## User Stories
 
@@ -51,56 +26,58 @@ For example:
 - Team A (queue-a): 10 A100 cards, 5 H100 cards
 - Team B (queue-b): 20 V100 cards, 3 A100 cards
 
-### Story 2: Multi-Card Selection for Job Flexibility
+### Story 2: Job Flexibility with Multi-Card Selection
 
-As a data scientist, I want to submit a training job that can run on either A100 or H100 GPUs, whichever is available first, without creating separate job submissions.
+As a data scientist, I want to submit a training job that can run on either H100 or A100 GPUs, with preference for H100.
 
-### Story 3: Mixed Whole and Shared GPU Scheduling
+### Story 3: CPU/Memory Decoupled from GPU Resources
 
-As a platform engineer, I want to provide both whole GPU cards for large training jobs and MPS/MIG partitioned cards for inference services in the same cluster, with separate quota management.
+As a resource administrator, I want to ensure GPU tasks only consume GPU quotas, not CPU/memory quotas, thereby reducing configuration complexity.
 
-### Story 4: Queue-level Card Quota Enforcement
+## Core Goals
 
-As a resource manager, I want to ensure that no team can exceed their allocated card quota, even if cluster capacity is available, to enforce SLA agreements.
+1. Implement fine-grained card type quota management
 
-## Design Detail
+2. Support single-instance multi-card requirements
+
+3. Decouple CPU/memory from GPU resource quotas
+
+## Design Details
 
 ### Architecture Overview
 
-The Capacity Card plugin works by:
-1. Discovering card resources from node labels and status
-2. Parsing card quotas from queue annotations
-3. Validating job card requests against queue card quotas
-4. Tracking card resource allocation across jobs and tasks
-5. Enforcing allocation limits during scheduling
+How the Capacity Card plugin works:
+1. Discover card resources from node labels and status
+2. Parse card quotas from queue annotations
+3. Validate job card requests against queue card quotas
+4. Track card resource allocation across jobs and tasks
+5. Enforce allocation limits during scheduling
 
 ### Key Concepts
 
-#### Card Resource vs. K8s Resource
+#### Card Resources vs. K8S Resources
 
-- **K8s Resource Name**: The actual resource name in node status and pod requests (e.g., `nvidia.com/gpu`, `nvidia.com/gpu.shared`, `nvidia.com/mig-1g.5gb`)
-- **Card Name**: A user-friendly, normalized name for the card type (e.g., `NVIDIA-A100-80GB`, `NVIDIA-A100-80GB/mps-80g*1/8`)
+- **K8S Resource Name**: The actual resource name in node status and Pod requests (e.g., `nvidia.com/gpu`, `nvidia.com/gpu.shared`, `nvidia.com/mig-1g.18gb`)
+- **Card Type Name**: User-friendly, canonical name for card types (e.g., `NVIDIA-A100`, `NVIDIA-H800/mps-80*1/2`, `NVIDIA-H200/mig-1g.18gb-mixed`)
 
-The plugin maintains a mapping between card names and K8s resource names for scheduling decisions.
+|K8S Resource Name|Card Type Name|Note|
+|---|---|---|
+|`nvidia.com/gpu`|`NVIDIA-A100`|Whole card|
+|`nvidia.com/gpu.shared`|`NVIDIA-H800/mps-80*1/2`|MPS sub-card|
+|`nvidia.com/mig-1g.18gb`|`NVIDIA-H200/mig-1g.18gb-mixed`|MIG sub-card|
 
-#### Card Types
+The plugin maintains mappings between card names and K8s resource names for scheduling decisions.
 
-1. **Whole Card**: Full GPU card resources (e.g., `nvidia.com/gpu`)
-2. **MPS Shared Card**: NVIDIA MPS partitioned GPUs (e.g., `nvidia.com/gpu.shared`)
-3. **MIG Shared Card**: NVIDIA MIG partitioned GPUs (e.g., `nvidia.com/mig-1g.5gb`)
+#### Multi-Card Requests
 
-#### Multi-Card Request
-
-Tasks can specify multiple acceptable card types separated by `|`:
+Tasks can specify multiple acceptable card types, separated by `|`, with priority decreasing from left to right:
 ```
-NVIDIA-A100-80GB|NVIDIA-H100-80GB
+NVIDIA-A100|NVIDIA-H100
 ```
-
-During scheduling, the plugin checks if any of the specified card types has sufficient quota in the queue.
 
 ### API Design
 
-#### Queue Annotation for Card Quota
+#### Queue Annotations for Card Quotas
 
 Queues use the annotation `volcano.sh/card.quota` to specify card resource quotas:
 
@@ -112,25 +89,81 @@ metadata:
   annotations:
     volcano.sh/card.quota: |
       {
-        "NVIDIA-A100-80GB": 10,
-        "NVIDIA-H100-80GB": 5,
-        "NVIDIA-A100-80GB/mps-80g*1/8": 16
+        "NVIDIA-A100": 10,
+        "NVIDIA-H100": 5,
+        "NVIDIA-A100/mps-80g*1/8": 16
       }
 spec:
   capability:
     cpu: "100"
     memory: "200Gi"
-  guarantee:
-    resource:
-      cpu: "50"
-      memory: "100Gi"
 ```
 
-**Format**: JSON object mapping card names to counts (integers)
+**Card Type Quotas**: Set quotas for each card type via JSON object in the `volcano.sh/card.quota` annotation. Card types without quotas default to 0, and must have a quota to use that card type.
 
-#### Job Annotation for Card Request
+Using annotations rather than configuring in `capability`, `deserved`, or `guarantee` avoids compatibility issues and only takes effect for the Capacity Card plugin.
 
-Jobs use the annotation `volcano.sh/card.request` to specify card resource requests for validation:
+Additionally, there's no need to set K8S resource names like `nvidia.com/gpu` in `capability`, `deserved`, or `guarantee`. The Capacity Card plugin automatically maps card type names to K8S resource names, simplifying management complexity.
+
+**CPU/Memory Quotas**: CPU/memory quotas are set in `capability`. If not set, the default quota is also 0. No need to configure `guarantee` as lower-level queues don't reserve resources; upper-level business systems control `capability` during allocation to implement resource reservation. `deserved` also doesn't need configuration as resource reclamation is not currently supported.
+
+**Other Resources**: Resources other than CPU/memory/card types are not limited and don't need configuration.
+
+#### Job Annotations for Card Requests
+
+`volcano.sh/card.name`: Located in `Pod` annotations, specifies the card model name used by specific instances in the task. The scheduler uses the card model from this annotation combined with queue quotas for quota management.
+
+```yaml
+metadata:
+  annotations:
+    volcano.sh/card.name: "NVIDIA-A100"
+```
+
+`volcano.sh/card.request` (optional): Located in `PodGroup` annotations, specifies the total requested card model resource quantity for the current task. Used for resource checking to prevent tasks from entering `Inqueue` state, avoiding the scheduler creating too many `Pending` `Pods`.
+
+If `Pods` have already been created, `volcano.sh/card.request` will not take effect, deferring to the actual resources requested by `Pods`, such as `Deployment` type workloads, which directly generate `Pods` after creation without queuing.
+
+```yaml
+metadata:
+  annotations:
+    volcano.sh/card.request: |
+      {
+        "NVIDIA-A100": 8
+      }
+```
+
+##### Job Resource Card Requests
+
+K8S resource types must still be configured in `resources`. The Capacity Card plugin cannot inject K8S resource type requests into `Pods`. K8S resource types need to correspond to the card model requested by the task.
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: 1
+  requests:
+    nvidia.com/gpu: 1
+```
+
+##### Node Selection
+
+Node selection is implemented through affinity. The Capacity Card plugin does not perform node filtering.
+
+```yaml
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoreDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operation: In
+            values:
+            - NVIDIA-A100
+```
+
+##### Volcano Job Example
+
+`volcano.sh/card.request` and `volcano.sh/card.name` are new annotations, other fields remain unchanged.
 
 ```yaml
 apiVersion: batch.volcano.sh/v1alpha1
@@ -140,7 +173,7 @@ metadata:
   annotations:
     volcano.sh/card.request: |
       {
-        "NVIDIA-A100-80GB": 8
+        "NVIDIA-A100": 8
       }
 spec:
   schedulerName: volcano
@@ -152,44 +185,167 @@ spec:
       template:
         metadata:
           annotations:
-            volcano.sh/card.name: "NVIDIA-A100-80GB"
+            volcano.sh/card.name: "NVIDIA-A100"
         spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoreDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operation: In
+                    values:
+                    - NVIDIA-A100
           containers:
             - name: trainer
               image: training:latest
               resources:
                 limits:
                   nvidia.com/gpu: 1
+                requests:
+                  nvidia.com/gpu: 1
 ```
 
-**Purpose**: Pre-validation before job enqueueing to provide fast feedback
+##### Deployment Example
 
-#### Task Annotation for Card Name
-
-Tasks/Pods use the annotation `volcano.sh/card.name` to specify the desired card name:
+`volcano.sh/card.name` is a new annotation, other fields remain unchanged.
 
 ```yaml
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: training-pod
-  annotations:
-    volcano.sh/card.name: "NVIDIA-A100-80GB|NVIDIA-H100-80GB"
+  name: inference-deployment
 spec:
-  schedulerName: volcano
-  containers:
-    - name: trainer
-      image: training:latest
-      resources:
-        limits:
-          nvidia.com/gpu: 1
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+      annotations:
+        volcano.sh/card.name: "NVIDIA-A100"
+        scheduling.volcano.sh/queue-name: "cr-queue1"
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoreDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operation: In
+                values:
+                - NVIDIA-A100
+      containers:
+        - name: inference
+          image: inference:latest
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+            requests:
+              nvidia.com/gpu: 1
+      schedulerName: volcano
 ```
 
-**Multi-Card Format**: Use `|` to separate multiple acceptable card types. The scheduler will check quota availability for each type and allocate based on availability.
+##### Single-Instance Multi-Card Request Example
 
-#### Plugin Configuration
+To use single-instance multi-card deployment, simply set the `volcano.sh/card.request` and `volcano.sh/card.name` annotations to multi-card configuration, such as `NVIDIA-A100|NVIDIA-H100`, to use either `NVIDIA-A100` or `NVIDIA-H100`.
 
-The plugin supports configuration through scheduler config:
+Note that multiple card types must correspond to the same K8S resource type, and must match the K8S resource type configured in the task's `resources`. Combining card resources with different K8S resource types is not supported. If K8S resource types differ, the K8S resource type in `resources` must match the finally selected card type, but `resources` are determined when the task is created and cannot be dynamically modified during scheduling. For example:
+
+- Whole GPU and Shared card combination: `NVIDIA-A100|NVIDIA-H800/mps-80*1/2`, with K8S resources `nvidia.com/gpu` and `nvidia.com/gpu.shared` respectively
+- Different GPU Shared card combination: `NVIDIA-H200/mig-1g.18gb-mixed|NVIDIA-H200/mig-2g.36gb-mixed`, with K8S resources `nvidia.com/mig-1g.18gb` and `nvidia.com/mig-2g.36gb` respectively
+- Different card type combination: `NVIDIA-A100|Ascend-910B`, with K8S resources `nvidia.com/gpu` and `huawei.com/ascend-910` respectively
+
+Volcano Job Example
+
+```yaml
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: training-job
+  annotations:
+    volcano.sh/card.request: |
+      {
+        "NVIDIA-A100|NVIDIA-H100": 8
+      }
+spec:
+  schedulerName: volcano
+  queue: queue-a
+  minAvailable: 1
+  tasks:
+    - replicas: 8
+      name: worker
+      template:
+        metadata:
+          annotations:
+            volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100"
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoreDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operation: In
+                    values:
+                    - NVIDIA-A100
+                    - NVIDIA-H100
+          containers:
+            - name: trainer
+              image: training:latest
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+                requests:
+                  nvidia.com/gpu: 1
+```
+
+Deployment Example
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+      annotations:
+        volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100"
+        scheduling.volcano.sh/queue-name: "cr-queue1"
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoreDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operation: In
+                values:
+                - NVIDIA-A100
+                - NVIDIA-H100
+      containers:
+        - name: inference
+          image: inference:latest
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+            requests:
+              nvidia.com/gpu: 1
+      schedulerName: volcano
+```
+
+### Plugin Configuration
+
+The plugin supports configuration through scheduler configuration:
 
 ```yaml
 actions: "enqueue, allocate, backfill"
@@ -197,117 +353,234 @@ tiers:
   - plugins:
       - name: capacity-card
         arguments:
-          cardUnlimitedCpuMemory: true  # Optional: if true, card resources don't require CPU/Memory quota
+          cardUnlimitedCpuMemory: true  # Optional: if true, card resources don't need CPU/memory quotas
+          nodeOrderWeight: 1.0 # Optional, node ordering weight coefficient
 ```
 
 **Configuration Options**:
-- `cardUnlimitedCpuMemory` (bool, default: false): If set to true, tasks requesting card resources are not checked against queue's CPU/Memory quota limits. Useful when card resources are the primary constraint.
+- `cardUnlimitedCpuMemory` (bool, default: false): If set to true, tasks requesting card resources won't be checked against the queue's CPU/memory quota limits. Useful when card resources are the primary constraint.
+- `nodeOrderWeight` (float64, default: 1.0): Node ordering weight coefficient, used to adjust the importance of card type priority in scheduling decisions. Must be positive. Larger values increase the impact of card type priority.
 
 ### Node Card Discovery
 
-The plugin automatically discovers card resources from node labels:
+The plugin automatically discovers card resources from node labels and status. The system identifies card types by matching node labels with regex patterns in the format: `<prefix>/<type>.product` (e.g., `nvidia.com/gpu.product`).
 
-#### Label Format
+#### Node Label and Resource Examples
 
 ```yaml
 apiVersion: v1
 kind: Node
 metadata:
   labels:
-    nvidia.com/gpu.product: "NVIDIA-A100-80GB"     # Card product name
-    nvidia.com/gpu.count: "8"                       # Number of cards
-    nvidia.com/gpu.memory: "81920"                  # Memory per card in MB
-    nvidia.com/gpu.replicas: "8"                    # For MPS: number of replicas
-    nvidia.com/mig-1g.5gb.count: "7"               # For MIG: count of this profile
+    # Basic card information (required)
+    nvidia.com/gpu.product: "NVIDIA-A100"     # Card product name
+    nvidia.com/gpu.count: "8"                 # Physical card count
+    nvidia.com/gpu.memory: "81920"            # Memory per card (MB)
+    
+    # MPS-specific labels (optional)
+    nvidia.com/gpu.replicas: "8"              # MPS shared replica count
+    
+    # MIG-specific labels (optional)
+    nvidia.com/mig-1g.5gb.count: "7"          # MIG profile instance count
 status:
   allocatable:
-    nvidia.com/gpu: "8"                             # Whole card resource
-    nvidia.com/gpu.shared: "64"                     # MPS shared resource
-    nvidia.com/mig-1g.5gb: "7"                      # MIG partition resource
+    nvidia.com/gpu: "8"                       # Whole card resource count
+    nvidia.com/gpu.shared: "64"               # MPS shared resource count (replicas * count)
+    nvidia.com/mig-1g.5gb: "7"                # MIG partition resource count
 ```
 
-#### Card Name Generation
+#### Card Type Name and Quantity Generation Rules
 
-- **Whole Card**: Uses the value from `<prefix>/gpu.product` label
-  - Example: `NVIDIA-A100-80GB`
-  
-- **MPS Card**: Generated as `<card-product>/mps-<memory>g*1/<replicas>`
-  - Example: `NVIDIA-A100-80GB/mps-80g*1/8`
-  
-- **MIG Card**: Generated as `<card-product>/mig-<profile>-mixed`
-  - Example: `NVIDIA-A100-80GB/mig-1g.5gb-mixed`
+The plugin automatically generates card type names based on node labels and allocatable resources, used for internal scheduler resource management and quota checking.
 
-### Main Process
+##### 1. MPS Shared Cards (Multi-Process Service)
+
+**Card Name Generation**:
+- **Format**: `<card-product>/mps-<memory>g*1/<replicas>`
+- **Components**:
+  - `<card-product>`: Retrieved from `<prefix>/<type>.product` label (e.g., `NVIDIA-A100`)
+  - `<memory>`: Retrieved from `<prefix>/<type>.memory` label, converted from MB to GB (rounded)
+  - `<replicas>`: Retrieved from `<prefix>/<type>.replicas` label
+
+**Card Quantity Retrieval**:
+- Read MPS resource count from `status.allocatable`
+- **Resource name**: Fixed as `nvidia.com/gpu.shared` (plugin internal constant `MPSResourceName`)
+
+**Complete Example**:
+```yaml
+metadata:
+  labels:
+    nvidia.com/gpu.product: "NVIDIA-A100"
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"        # 81920 MB ≈ 80 GB
+    nvidia.com/gpu.replicas: "8"
+status:
+  allocatable:
+    nvidia.com/gpu.shared: "64"           # 8 cards × 8 replicas = 64
+```
+- **Generated card type name**: `NVIDIA-A100/mps-80g*1/8`
+- **Card quantity**: `64` (represents a total of 64 MPS instances)
+
+##### 2. MIG Partition Cards (Multi-Instance GPU)
+
+**Card Name Generation**:
+- **Format**: `<card-product>/mig-<profile>-mixed`
+- **Components**:
+  - `<card-product>`: Retrieved from `<prefix>/<type>.product` label (e.g., `NVIDIA-A100`)
+  - `<profile>`: Extracted from resource name, the part after removing `nvidia.com/mig-` prefix
+
+**Card Quantity Retrieval**:
+- Read corresponding MIG resource count from `status.allocatable`
+- **Matching rule**: All resources with names starting with `nvidia.com/mig-`
+
+**Complete Example**:
+```yaml
+metadata:
+  labels:
+    nvidia.com/gpu.product: "NVIDIA-A100"
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+    nvidia.com/mig-1g.5gb.count: "7"
+    nvidia.com/mig-2g.10gb.count: "4"
+status:
+  allocatable:
+    nvidia.com/mig-1g.5gb: "7"
+    nvidia.com/mig-2g.10gb: "4"
+```
+- **Generated card type names**:
+  - `NVIDIA-A100/mig-1g.5gb-mixed` (quantity: 7)
+  - `NVIDIA-A100/mig-2g.10gb-mixed` (quantity: 4)
+
+##### 3. Whole Cards (Whole GPU)
+
+**Card Name Generation**:
+- Directly uses the value of `<prefix>/<type>.product` label as the card name
+- **Matching rule**: Finds labels matching `^((.+?)/(\w+))\.product$`
+  - Example: `nvidia.com/gpu.product: "NVIDIA-A100"` → Card name is `NVIDIA-A100`
+
+**Card Quantity Retrieval**:
+- Read corresponding resource count from `status.allocatable`
+- **Matching rule**: Resources with names starting with the extracted resource prefix (`<prefix>`)
+  - Example: `nvidia.com/gpu: "8"` → Card quantity is 8
+
+**Complete Example**:
+```yaml
+metadata:
+  labels:
+    nvidia.com/gpu.product: "NVIDIA-A100"
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+status:
+  allocatable:
+    nvidia.com/gpu: "8"
+```
+- **Generated card type name**: `NVIDIA-A100`
+- **Card quantity**: `8`
+
+#### Card Type Discovery Flow
+
+1. **Label Parsing**: Iterate through node labels, find labels matching the `<prefix>/<type>.product` pattern
+2. **Extract Basic Information**: Extract `product`, `count`, `memory`, etc. from labels
+3. **Resource Scanning**: Iterate through all resources in `status.allocatable`
+4. **Type Determination and Mapping**:
+   - If resource name is `nvidia.com/gpu.shared`, generate MPS card type
+   - If resource name starts with `nvidia.com/mig-`, generate corresponding MIG card type
+   - If resource name starts with the extracted prefix, generate whole card type
+5. **Establish Mapping**: Maintain `Card Type Name → Kubernetes Resource Name` mapping for scheduling decisions
+
+### Main Workflows
 
 #### Plugin Initialization (OnSessionOpen)
 
-1. **Build Total Resource**:
-   - List all nodes from the informer
+1. **Build Total Resources**:
+   - List all nodes from informer
    - Extract card information from node labels
    - Parse card resources from node status
    - Build mapping: card name → K8s resource name
-   - Calculate cluster total resources (CPU, Memory, Cards)
+   - Calculate cluster total resources (CPU, memory, cards)
 
 2. **Build Queue Attributes**:
    - Parse card quotas from queue annotations (`volcano.sh/card.quota`)
    - Calculate queue capability, guarantee, and deserved resources
-   - Track allocated, inqueue, and elastic resources per queue
+   - Track allocated, inqueue, and elastic resources for each queue
 
 3. **Register Scheduling Functions**:
-   - `JobEnqueueableFn`: Pre-check job card requests against queue quota
-   - `AllocatableFn`: Validate task card allocation against queue quota
+   - `JobEnqueueableFn`: Pre-check job card requests against queue quotas
+   - `AllocatableFn`: Validate task card allocation against queue quotas
+   - `NodeOrderFn`: Score and sort nodes based on card type priority
    - `AllocateFunc` / `DeallocateFunc`: Update queue resource tracking
 
 #### Job Enqueueable Check
 
-When a job is submitted:
+When submitting a job:
 
-1. Parse job's card request from annotation (`volcano.sh/card.request`)
+1. Parse job's card requests from annotations (`volcano.sh/card.request`)
 2. Calculate total resources to be used: `allocated + inqueue + job.minResources - elastic`
-3. Check CPU/Memory quota (unless `cardUnlimitedCpuMemory` is enabled)
-4. Check card resource quota:
-   - For each card type requested
+3. Check CPU/memory quotas (unless `cardUnlimitedCpuMemory` is enabled and task uses card resources)
+4. Check card resource quotas:
+   - For each requested card type
    - If multi-card request (contains `|`), check each alternative
    - Verify: `totalToBeUsed[cardType] <= queueCapability[cardType]`
-5. If all checks pass, mark job as InQueue and reserve resources
+5. If all checks pass, mark job as Inqueue and reserve resources
 
 #### Task Allocatable Check
 
 When scheduling a task:
 
-1. Parse task's card request from annotation (`volcano.sh/card.name`)
-2. Extract card resource from pod's resource requests
+1. Parse task's card request from annotations (`volcano.sh/card.name`)
+2. Extract card resources from Pod's resource requests
 3. Calculate total resources to be allocated: `allocated + task.request`
-4. Check CPU/Memory quota (unless `cardUnlimitedCpuMemory` is enabled)
-5. Check card resource quota:
+4. Check CPU/memory quotas (unless `cardUnlimitedCpuMemory` is enabled and task uses card resources)
+5. Check card resource quotas:
    - Support multi-card selection (e.g., `A100|H100`)
-   - For multi-card, check each option and succeed if any passes
+   - For multi-card, check each option, succeed if any passes
    - Verify: `totalToBeAllocated[cardType] <= queueCapability[cardType]`
-6. If checks fail, emit Kubernetes events to pod with reason
+6. If check fails, emit Kubernetes event to Pod with reason
+
+#### Node Ordering
+
+When a task specifies multi-card type selection (e.g., `A100|H100|V100`), the plugin scores nodes to implement card type priority scheduling:
+
+1. Parse card name from task annotation (`volcano.sh/card.name`)
+2. Check if it contains `|` separator, if not return score 0 (no priority preference)
+3. Split card type list by `|` separator, left side has highest priority
+4. Iterate through card type list, check if node has that card type resource
+5. Calculate node score:
+   - Use exponential decay formula: `baseScore = 100 × (0.5 ^ index)`
+     - 0th card type (highest priority): 100 points
+     - 1st card type: 50 points
+     - 2nd card type: 25 points
+     - 3rd card type: 12.5 points
+   - Apply weight coefficient: `finalScore = baseScore × nodeOrderWeight`
+   - Return score immediately after finding first matching card type
+6. Final score combines with scores from other plugins to determine node selection
+
+**Scoring Characteristics**:
+- Only multi-card selection tasks participate in node ordering
+- Each card type has a unique non-zero score
+- Adjust overall influence of card type priority through `nodeOrderWeight` parameter
 
 #### Resource Tracking
 
 The plugin maintains real-time resource tracking:
 
-- **On Allocate**: Add task resources to `queue.allocated`
-- **On Deallocate**: Subtract task resources from `queue.allocated`
-- **Queue Share Calculation**: `share = max(allocated[resource] / deserved[resource])`
+- **On allocation**: Add task resources to `queue.allocated`
+- **On deallocation**: Subtract task resources from `queue.allocated`
+- **Queue share calculation**: `share = max(allocated[resource] / deserved[resource])`
 
 ### Implementation Details
 
 #### Card Resource Quantification
 
-Card resources are stored as scalar resources in milli-units (multiplied by 1000):
-- 2 cards → 2000 in scalar resources
-- This aligns with Volcano's internal resource representation
+Card resources are stored as scalar resources in milli-units (multiplied by 1000), consistent with Volcano's internal resource representation: 2 cards → 2000 in scalar resources
 
 #### Multi-Card Request Processing
 
 The plugin supports two modes for multi-card request checking:
 
-##### Task Mode (Task-level Checking)
+##### Task Mode (Task-level Check)
 
-For task allocation, the plugin checks if **any single card type** can satisfy the request, because each task must use only one card type:
+For task allocation, the plugin checks if **any single card type** can satisfy the request, since each task must use only one card type:
 
 For a multi-card request like `A100|H100|V100`:
 
@@ -315,55 +588,45 @@ For a multi-card request like `A100|H100|V100`:
 2. For each card type in the list:
    - Clone `toBeUsedResource`
    - Add requested quantity to each individual card name
-   - Check if `toBeUsedResource[cardType] <= queueCapability[cardType]`
+   - Check `toBeUsedResource[cardType] <= queueCapability[cardType]`
    - If any card type passes, return success
-3. If all fail, return the error with the multi-card name
+3. If all fail, return error with multi-card name
 
-##### Job Mode (Job-level Checking)
+##### Job Mode (Job-level Check)
 
-For job enqueueing, the plugin checks if the **sum of all card type quotas** can satisfy the request, because different tasks in the same job can use different card types:
+For job enqueue, the plugin checks if **the sum of all card type quotas** can satisfy the request, since different tasks in the same job can use different card types:
 
 For a multi-card request like `A100|H100`:
 
 1. Split by `|` separator
-2. Calculate the sum of available quotas across all card types:
+2. Calculate sum of available quotas for all card types:
    - `totalAvailableQuota = queueCapability[A100] + queueCapability[H100]`
-3. Calculate the sum of resources to be used across all card types:
+3. Calculate sum of resources to be used for all card types:
    - `totalToBeUsed = toBeUsedResource[A100] + toBeUsedResource[H100] + requestedQuantity`
-4. Check if `totalToBeUsed <= totalAvailableQuota`
+4. Check `totalToBeUsed <= totalAvailableQuota`
 5. If yes, return success; otherwise, return error
 
 **Example:**
 - Queue has: A100=5, H100=3 (total=8)
-- Already allocated: A100=2, H100=1 (total=3)
-- New job requests: `A100|H100` with 4 cards
+- Allocated: A100=2, H100=1 (total=3)
+- New job requests: `A100|H100` 4 cards
 - Job mode check: (2+1+4) = 7 <= 8 ✓ Success
-- This allows the job's different tasks to potentially use 3 more A100s and 1 more H100
+- This allows different tasks in the job to potentially use 3 additional A100s and 1 additional H100
 
-This enhancement allows flexible job submissions where different tasks can use different card types, maximizing resource utilization.
+This enhancement allows flexible job submission where different tasks can use different card types, maximizing resource utilization.
 
 #### Event Recording
 
-The plugin emits Kubernetes events for:
+The plugin emits Kubernetes events for the following situations:
 - `GetTaskRequestResourceFailed`: Failed to parse task resource request
-- `EmptyQueueCapability`: Queue has no capability configured
+- `EmptyQueueCapability`: Queue has no configured capability
 - `InsufficientCPUQuota`: Insufficient CPU quota in queue
 - `InsufficientMemoryQuota`: Insufficient memory quota in queue
 - `InsufficientScalarQuota`: Insufficient card/scalar quota in queue
 
-### Integration with Capacity Scheduling
-
-The Capacity Card plugin builds upon Volcano's capacity plugin concepts:
-
-- **Capability**: Maximum card resources a queue can use
-- **Guarantee**: Reserved card resources not shared with other queues
-- **Deserved**: Target allocation for fair sharing and reclaim
-
-However, unlike the standard capacity plugin, card resources are specified via annotations rather than the Queue's ResourceList fields, allowing more flexible card type specification.
-
 ### Metrics and Observability
 
-The plugin exports Prometheus metrics for queue resource tracking:
+The plugin exports Prometheus metrics to track queue resources:
 - `volcano_queue_card_deserved`: Deserved card resources per queue
 - `volcano_queue_card_allocated`: Currently allocated card resources per queue
 - `volcano_queue_card_request`: Requested card resources per queue
@@ -374,7 +637,7 @@ The plugin exports Prometheus metrics for queue resource tracking:
 ### Example 1: Basic Card Quota
 
 **Cluster Setup**:
-- 2 nodes with 4 A100 cards each (total: 8 A100)
+- 2 nodes, each with 4 A100 cards (total: 8 A100s)
 
 **Queue Configuration**:
 ```yaml
@@ -383,7 +646,7 @@ kind: Queue
 metadata:
   name: team-a
   annotations:
-    volcano.sh/card.quota: '{"NVIDIA-A100-80GB": 5}'
+    volcano.sh/card.quota: '{"NVIDIA-A100": 5}'
 spec:
   capability:
     cpu: "100"
@@ -397,7 +660,7 @@ kind: Job
 metadata:
   name: training
   annotations:
-    volcano.sh/card.request: '{"NVIDIA-A100-80GB": 4}'
+    volcano.sh/card.request: '{"NVIDIA-A100": 4}'
 spec:
   queue: team-a
   minAvailable: 4
@@ -406,16 +669,18 @@ spec:
       template:
         metadata:
           annotations:
-            volcano.sh/card.name: "NVIDIA-A100-80GB"
+            volcano.sh/card.name: "NVIDIA-A100"
         spec:
           containers:
             - name: worker
               resources:
                 limits:
                   nvidia.com/gpu: 1
+                requests:
+                  nvidia.com/gpu: 1
 ```
 
-**Result**: Job successfully enqueued (4 ≤ 5) and tasks scheduled.
+**Result**: Job successfully enqueues (4 ≤ 5) and schedules tasks.
 
 ### Example 2: Multi-Card Selection
 
@@ -426,7 +691,7 @@ kind: Job
 metadata:
   name: flexible-training
   annotations:
-    volcano.sh/card.request: '{"NVIDIA-A100-80GB|NVIDIA-H100-80GB": 4}'
+    volcano.sh/card.request: '{"NVIDIA-A100|NVIDIA-H100": 4}'
 spec:
   queue: team-a
   minAvailable: 1
@@ -435,22 +700,24 @@ spec:
       template:
         metadata:
           annotations:
-            volcano.sh/card.name: "NVIDIA-A100-80GB|NVIDIA-H100-80GB"
+            volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100"
         spec:
           containers:
             - name: worker
               resources:
                 limits:
                   nvidia.com/gpu: 1
+                requests:
+                  nvidia.com/gpu: 1
 ```
 
-**Result**: The scheduler will try to allocate A100 first; if quota exhausted, tries H100.
+**Result**: Scheduler will try to allocate A100 first; if quota is exhausted, will try H100.
 
 ### Example 3: MPS Shared GPU
 
 **Node Labels**:
 ```yaml
-nvidia.com/gpu.product: "NVIDIA-A100-80GB"
+nvidia.com/gpu.product: "NVIDIA-A100"
 nvidia.com/gpu.count: "4"
 nvidia.com/gpu.memory: "81920"
 nvidia.com/gpu.replicas: "8"
@@ -467,21 +734,21 @@ status:
 ```yaml
 metadata:
   annotations:
-    volcano.sh/card.quota: '{"NVIDIA-A100-80GB/mps-80g*1/8": 32}'
+    volcano.sh/card.quota: '{"NVIDIA-A100/mps-80g*1/8": 32}'
 ```
 
 **Job Submission**:
 ```yaml
 metadata:
   annotations:
-    volcano.sh/card.request: '{"NVIDIA-A100-80GB/mps-80g*1/8": 16}'
+    volcano.sh/card.request: '{"NVIDIA-A100/mps-80g*1/8": 16}'
 spec:
   tasks:
     - replicas: 16
       template:
         metadata:
           annotations:
-            volcano.sh/card.name: "NVIDIA-A100-80GB/mps-80g*1/8"
+            volcano.sh/card.name: "NVIDIA-A100/mps-80g*1/8"
         spec:
           containers:
             - resources:
@@ -489,141 +756,11 @@ spec:
                   nvidia.com/gpu.shared: 1
 ```
 
-**Result**: 16 inference pods share the 4 A100 GPUs via MPS.
+**Result**: 16 inference Pods share 4 A100 GPUs via MPS.
 
-## Notes
+### Example 4: Node Ordering Configuration
 
-1. **Plugin Compatibility**: The Capacity Card plugin is designed to work alongside other Volcano plugins (gang, priority, etc.). It should not be enabled simultaneously with the standard `capacity` or `proportion` plugin to avoid conflicts.
-
-2. **Card Discovery Requirements**: Node labels must be properly configured (typically by GPU operators like NVIDIA GPU Operator) for card discovery to work correctly.
-
-3. **Annotation-based Design**: The choice of annotations over native Kubernetes ResourceList allows for:
-   - More flexible naming conventions
-   - Support for multi-card selection syntax
-   - Easier evolution without API changes
-
-4. **Multi-Card Scheduling**: The plugin supports flexible multi-card scheduling:
-   - **Job mode** (enqueue phase): Checks the sum of multi-card quotas, allowing different tasks in the same job to use different card types
-   - **Task mode** (allocate phase): Ensures each individual task uses only one card type
-   - This provides optimal resource utilization while maintaining task-level constraints
-
-5. **Performance Considerations**: The plugin caches node card information to minimize overhead during scheduling cycles.
-
-## Node Ordering for Multi-Card Type Tasks
-
-### Overview
-
-The `capacity-card` plugin supports node ordering for tasks with multiple card type options. When a task specifies multiple acceptable card types (separated by `|`), nodes providing higher-priority card types receive higher scores.
-
-### Configuration
-
-#### nodeOrderWeight
-
-The `nodeOrderWeight` parameter is a multiplier applied to the final node score. This allows you to control the overall importance of card type priority in scheduling decisions.
-
-**Format:**
-```yaml
-apiVersion: scheduling.volcano.sh/v1beta1
-kind: Scheduler
-spec:
-  plugins:
-    - name: capacity-card
-      arguments:
-        nodeOrderWeight: 1.0  # Must be positive
-```
-
-**Default:** `1.0` (no scaling)
-
-**Valid Range:** Any positive number `> 0`
-
-### Scoring Algorithm
-
-The score for a node is calculated in two steps:
-
-```
-baseScore = 100 * (0.5 ^ index)
-finalScore = baseScore * nodeOrderWeight
-```
-
-Where:
-- `index` is the position of the matched card type (0-based, 0 is highest priority)
-- `0.5` is the fixed decay rate (each subsequent card type gets 50% less base score)
-- `nodeOrderWeight` is the configurable multiplier
-
-### Examples
-
-#### Example 1: Default Weight (1.0)
-
-Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
-
-**Scores:**
-- Node with NVIDIA-A100: `100 * 0.5^0 * 1.0 = 100`
-- Node with NVIDIA-H100: `100 * 0.5^1 * 1.0 = 50`
-- Node with NVIDIA-T4: `100 * 0.5^2 * 1.0 = 25`
-
-#### Example 2: Increased Importance (2.0)
-
-Configuration:
-```yaml
-nodeOrderWeight: 2.0
-```
-
-Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
-
-**Scores:**
-- Node with NVIDIA-A100: `100 * 0.5^0 * 2.0 = 200`
-- Node with NVIDIA-H100: `100 * 0.5^1 * 2.0 = 100`
-- Node with NVIDIA-T4: `100 * 0.5^2 * 2.0 = 50`
-
-This makes card type priority more important relative to other scheduling factors (like resource utilization).
-
-#### Example 3: Decreased Importance (0.5)
-
-Configuration:
-```yaml
-nodeOrderWeight: 0.5
-```
-
-Task annotation: `volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"`
-
-**Scores:**
-- Node with NVIDIA-A100: `100 * 0.5^0 * 0.5 = 50`
-- Node with NVIDIA-H100: `100 * 0.5^1 * 0.5 = 25`
-- Node with NVIDIA-T4: `100 * 0.5^2 * 0.5 = 12.5`
-
-This makes card type priority less important, allowing other factors to have more influence.
-
-#### Example 4: Many Card Types (10+)
-
-Even the 10th card type has a non-zero score:
-
-Task annotation: `volcano.sh/card.name: "Card0|Card1|Card2|Card3|Card4|Card5|Card6|Card7|Card8|Card9"`
-
-**Base Scores (with weight=1.0):**
-- Card0: `100.00`
-- Card1: `50.00`
-- Card2: `25.00`
-- Card3: `12.50`
-- Card4: `6.25`
-- Card5: `3.13`
-- Card6: `1.56`
-- Card7: `0.78`
-- Card8: `0.39`
-- Card9: `0.20`
-
-Every card type receives a unique, non-zero score!
-
-### Choosing the Right Weight
-
-| Weight | Behavior | Use Case |
-|--------|----------|----------|
-| > 2.0 | High importance | Card type priority dominates scheduling decisions |
-| 1.0-2.0 | Moderate-high importance | Card type priority is important but balanced (default: 1.0) |
-| 0.5-1.0 | Moderate-low importance | Other factors (like utilization) are more important |
-| < 0.5 | Low importance | Card type priority has minimal influence |
-
-### Full Configuration Example
-
+**Scheduler Configuration** (adjust weight to increase card type priority importance):
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -638,87 +775,85 @@ data:
       - name: capacity-card
         arguments:
           cardUnlimitedCpuMemory: false
-          nodeOrderWeight: 1.0
-      - name: priority
-      - name: gang
-      - name: conformance
+          nodeOrderWeight: 2.0    # Increase card type priority influence
 ```
 
-### Task Annotation Example
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: multi-card-task
-  annotations:
-    volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"
-spec:
-  schedulerName: volcano
-  containers:
-  - name: gpu-job
-    image: nvidia/cuda:11.0-base
-    resources:
-      limits:
-        nvidia.com/gpu: 2
-```
-
-In this example:
-- The task can use A100, H100, or T4 GPUs
-- Nodes with A100 get the highest score (100)
-- Nodes with H100 get medium score (50 with default weight)
-- Nodes with T4 get lower score (25 with default weight)
-- Volcano scheduler will prefer A100 nodes when available
-
-## Recent Enhancements
-
-### Multi-Card Job Mode (Implemented)
-
-The plugin now supports flexible multi-card scheduling at the job level:
-- **Job Mode**: When a job requests multi-card resources (e.g., `A100|H100`), the job-level check validates that the **sum of all card type quotas** can accommodate the job
-- This allows different tasks within the same job to use different card types
-- Each individual task still uses only one card type (enforced in task mode)
-- Maximizes resource utilization and scheduling flexibility
-
-**Example Use Case:**
+**Job Submission** (multi-card selection with priority):
 ```yaml
 apiVersion: batch.volcano.sh/v1alpha1
 kind: Job
 metadata:
+  name: multi-card-training
   annotations:
-    # Request 6 cards total, can use A100 or H100
-    volcano.sh/card.request: '{"A100|H100": 6}'
+    volcano.sh/card.request: '{"NVIDIA-A100|NVIDIA-H100|NVIDIA-T4": 4}'
 spec:
+  queue: team-a
+  minAvailable: 1
   tasks:
-    - name: training-task
-      replicas: 3
+    - replicas: 4
       template:
         metadata:
           annotations:
-            volcano.sh/card.name: "A100"
+            volcano.sh/card.name: "NVIDIA-A100|NVIDIA-H100|NVIDIA-T4"
         spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoreDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operation: In
+                    values:
+                    - NVIDIA-A100
+                    - NVIDIA-H100
+                    - NVIDIA-T4
           containers:
-            - resources:
+            - name: trainer
+              image: training:latest
+              resources:
                 limits:
                   nvidia.com/gpu: 1
-    - name: inference-task
-      replicas: 3
-      template:
-        metadata:
-          annotations:
-            volcano.sh/card.name: "H100"
-        spec:
-          containers:
-            - resources:
-                limits:
+                requests:
                   nvidia.com/gpu: 1
 ```
 
-In this example, if the queue has `A100: 4, H100: 4`, the job passes the job-level check because `6 <= (4+4)`. The 3 training tasks can use A100s while the 3 inference tasks use H100s.
+**Node Scoring** (assuming weight of 2.0):
+- Nodes with NVIDIA-A100: `100 × 0.5^0 × 2.0 = 200` (highest priority)
+- Nodes with NVIDIA-H100: `100 × 0.5^1 × 2.0 = 100` (medium priority)
+- Nodes with NVIDIA-T4: `100 × 0.5^2 × 2.0 = 50` (lower priority)
+
+**Result**: Scheduler prefers A100 nodes when resources are available, then H100, finally T4.
+
+## Considerations
+
+1. **Plugin Compatibility**: The Capacity Card plugin is designed to work with other Volcano plugins (gang, priority, etc.). It should not be enabled simultaneously with the standard `capacity` or `proportion` plugins to avoid conflicts.
+
+2. **Card Discovery Requirements**: Node labels must be properly configured (typically by GPU operators like NVIDIA GPU Operator) for card discovery to work correctly.
+
+3. **Annotation-Based Design**: Choosing annotations over native Kubernetes ResourceList allows:
+   - Compatibility with scheduler logic
+   - More flexible naming conventions
+   - Support for multi-card selection syntax
+   - Easier evolution without API changes
+
+4. **Multi-Card Scheduling**: The plugin supports flexible multi-card scheduling:
+   - **Job Mode** (enqueue phase): Checks sum of multi-card quotas, allowing different tasks in the same job to use different card types
+     - Example: Job requests `"A100|H100": 6`, queue has `A100: 4, H100: 4`, enqueue check passes (6 ≤ 4+4)
+     - Allows 3 tasks to use A100, 3 tasks to use H100, maximizing resource utilization
+   - **Task Mode** (allocation phase): Ensures each individual task uses only one card type
+   - This provides optimal resource utilization while maintaining task-level constraints
+
+5. **Node Ordering Weight**: The `nodeOrderWeight` parameter affects the overall scale of node scoring:
+   - `> 2.0`: Card type priority dominates scheduling decisions
+   - `1.0-2.0`: Card type priority important but balanced (default 1.0)
+   - `0.5-1.0`: Other factors (like utilization) more important
+   - `< 0.5`: Card type priority has minimal impact
+
+6. **Performance Considerations**: The plugin caches node card information to minimize overhead during scheduling cycles.
 
 ## Future Work
 
-- Support preemption and reclaim for card resources
+- Support preemption and reclamation for card resources
 - Support hierarchical queue card quota management
 
 ## References
@@ -727,3 +862,4 @@ In this example, if the queue has `A100: 4, H100: 4`, the job passes the job-lev
 - [NVIDIA MPS Documentation](https://docs.nvidia.com/deploy/mps/index.html)
 - [NVIDIA MIG User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/)
 - [Volcano Scheduler Framework](https://volcano.sh/en/docs/)
+
