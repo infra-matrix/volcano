@@ -193,8 +193,8 @@ const (
 	// Using 0.5 means: 1st card=100, 2nd card=50, 3rd card=25, etc.
 	nodeOrderDecayRate = 0.5
 
-	// serviceTypeByPodOwnerReferencesArg is the plugin config name for allowing service type inference by pod owner references.
-	serviceTypeByPodOwnerReferencesArg = "allowServiceTypeByPodOwnerReferences"
+	// serviceTypeByPodOwnerReferencesArg is the plugin config name for allowing
+	podOwnerReferenceToServiceTypeArg = "podOwnerReferenceToServiceType"
 
 	// overCommitFactorName is resource overCommit factor for enqueue action
 	// It determines the number of `pending` pods that the scheduler will tolerate
@@ -207,26 +207,27 @@ const (
 
 // Plugin implements the capacity plugin.
 type Plugin struct {
-	queueOpts                            map[api.QueueID]*queueAttr
-	totalResource                        *api.Resource
-	totalGuarantee                       *api.Resource
-	nodeLister                           v1.NodeLister
-	nodeCardInfos                        map[string]NodeCardResourceInfo
-	cardNameToResourceName               map[corev1.ResourceName]corev1.ResourceName
-	isCardUnlimitedCpuMemory             bool
-	allowServiceTypeByPodOwnerReferences bool
-	nodeOrderWeight                      float64
-	overCommitFactor                     float64
+	queueOpts                      map[api.QueueID]*queueAttr
+	totalResource                  *api.Resource
+	totalGuarantee                 *api.Resource
+	nodeLister                     v1.NodeLister
+	nodeCardInfos                  map[string]NodeCardResourceInfo
+	cardNameToResourceName         map[corev1.ResourceName]corev1.ResourceName
+	isCardUnlimitedCpuMemory       bool
+	podOwnerReferenceToServiceType map[string]string
+	nodeOrderWeight                float64
+	overCommitFactor               float64
 }
 
 // New return capacity plugin.
 func New(_ framework.Arguments) framework.Plugin {
 	return &Plugin{
-		queueOpts:              map[api.QueueID]*queueAttr{},
-		totalResource:          api.EmptyResource(),
-		totalGuarantee:         api.EmptyResource(),
-		nodeCardInfos:          map[string]NodeCardResourceInfo{},
-		cardNameToResourceName: map[corev1.ResourceName]corev1.ResourceName{},
+		queueOpts:                      map[api.QueueID]*queueAttr{},
+		totalResource:                  api.EmptyResource(),
+		totalGuarantee:                 api.EmptyResource(),
+		nodeCardInfos:                  map[string]NodeCardResourceInfo{},
+		cardNameToResourceName:         map[corev1.ResourceName]corev1.ResourceName{},
+		podOwnerReferenceToServiceType: make(map[string]string),
 	}
 }
 
@@ -318,7 +319,7 @@ func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
 			)
 			return []*api.TaskInfo{}, util.Reject
 		}
-		return p.ReclaimableFn(reclaimer, reclaimees)
+		return p.ReclaimableFn(ssn, reclaimer, reclaimees)
 	})
 }
 
@@ -335,8 +336,8 @@ func (p *Plugin) initArguments(ssn *framework.Session) {
 	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
 	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
 
-	p.allowServiceTypeByPodOwnerReferences = p.ServiceTypeByPodOwnerReferences(ssn)
-	klog.V(4).Infof("ServiceTypeByPodOwnerReferences: %v", p.allowServiceTypeByPodOwnerReferences)
+	p.podOwnerReferenceToServiceType = p.GetPodOwnerReferenceToServiceType(ssn)
+	klog.V(4).Infof("PodOwnerReferenceToServiceType: %v", p.podOwnerReferenceToServiceType)
 
 	p.overCommitFactor = p.GetOverCommitFactor(ssn)
 	klog.V(4).Infof("OverCommitFactor: %v", p.overCommitFactor)
@@ -366,25 +367,29 @@ func (p *Plugin) IsCardUnlimitedCpuMemory(ssn *framework.Session) bool {
 	return false
 }
 
-// ServiceTypeByPodOwnerReferences checks if service type inference by pod owner references is allowed.
-func (p *Plugin) ServiceTypeByPodOwnerReferences(ssn *framework.Session) bool {
+// GetPodOwnerReferenceToServiceType gets the pod owner reference to service type mapping from plugin arguments.
+func (p *Plugin) GetPodOwnerReferenceToServiceType(ssn *framework.Session) map[string]string {
 	for _, tier := range ssn.Tiers {
 		for _, plugin := range tier.Plugins {
 			if plugin.Name != PluginName {
 				continue
 			}
-			allowValue, ok := plugin.Arguments[serviceTypeByPodOwnerReferencesArg]
+			value, ok := plugin.Arguments[podOwnerReferenceToServiceTypeArg]
 			if !ok {
-				return false
+				return map[string]string{}
 			}
-			allow, ok := allowValue.(bool)
+			valueMap, ok := value.(map[any]any)
 			if !ok {
-				return false
+				return map[string]string{}
 			}
-			return allow
+			convertedMap := make(map[string]string)
+			for k, v := range valueMap {
+				convertedMap[k.(string)] = v.(string)
+			}
+			return convertedMap
 		}
 	}
-	return false
+	return map[string]string{}
 }
 
 // GetNodeOrderWeight gets the node order weight from plugin arguments.

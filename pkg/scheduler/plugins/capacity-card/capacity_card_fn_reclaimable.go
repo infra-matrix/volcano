@@ -25,6 +25,7 @@ package capacitycard
 import (
 	`k8s.io/klog/v2`
 	`volcano.sh/volcano/pkg/scheduler/api`
+	`volcano.sh/volcano/pkg/scheduler/framework`
 	`volcano.sh/volcano/pkg/scheduler/plugins/util`
 )
 
@@ -43,22 +44,21 @@ const (
 // ReclaimableFn selects the reclaimable tasks under the capacity card plugin.
 // Polices:
 // 1. High priority inference services can preempt resources from lower priority training tasks.
-// 2. Lower or equal priority inference services cannot preempt resources from high priority training tasks.
-// 3. Training tasks cannot preempt each other, nor can they preempt resources from inference services.
-// 4. Inference services cannot preempt each other.
+// 2. Training tasks cannot preempt each other, nor can they preempt resources from inference services.
+// 3. Inference services cannot preempt each other.
 func (p *Plugin) ReclaimableFn(
-	reclaimer *api.TaskInfo, reclaimees []*api.TaskInfo,
+	ssn *framework.Session, reclaimer *api.TaskInfo, reclaimees []*api.TaskInfo,
 ) ([]*api.TaskInfo, int) {
 	var (
 		victims              []*api.TaskInfo
-		reclaimerServiceType = p.getTaskServiceType(reclaimer)
+		reclaimerServiceType = p.getTaskServiceType(ssn, reclaimer)
 	)
 	// Training tasks cannot preempt each other, nor can they preempt resources from inference services.
 	if reclaimerServiceType == serviceTypeTraining {
 		return victims, util.Permit
 	}
 	for _, reclaimee := range reclaimees {
-		reclaimeeServiceType := p.getTaskServiceType(reclaimee)
+		reclaimeeServiceType := p.getTaskServiceType(ssn, reclaimee)
 		if reclaimeeServiceType == serviceTypeInference {
 			// Inference services cannot preempt each other.
 			continue
@@ -69,39 +69,29 @@ func (p *Plugin) ReclaimableFn(
 			continue
 		}
 
-		// Lower or equal priority inference services cannot preempt resources from high priority training tasks.
-		if reclaimer.Priority <= reclaimee.Priority {
-			continue
-		}
-
 		victims = append(victims, reclaimee)
 	}
 	klog.V(4).Infof("reclaimer: %s, victims: %+v", reclaimer, victims)
 	return victims, util.Permit
 }
 
-func (p *Plugin) getTaskServiceType(ti *api.TaskInfo) serviceType {
+func (p *Plugin) getTaskServiceType(ssn *framework.Session, ti *api.TaskInfo) serviceType {
 	if ti.Pod == nil {
 		return serviceTypeUnknown
 	}
-	st := ti.Pod.Annotations[serviceTypeAnnoKey]
+	var (
+		job = ssn.Jobs[ti.Job]
+		pg  = job.PodGroup
+		st  = pg.Annotations[serviceTypeAnnoKey]
+	)
 	if st != "" {
 		return serviceType(st)
 	}
-	if !p.allowServiceTypeByPodOwnerReferences {
+	if len(p.podOwnerReferenceToServiceType) == 0 {
 		return serviceTypeUnknown
 	}
 	if ti.Pod.OwnerReferences == nil || len(ti.Pod.OwnerReferences) == 0 {
 		return serviceTypeUnknown
 	}
-	switch ti.Pod.OwnerReferences[0].Kind {
-	case "Job":
-		return serviceTypeTraining
-
-	case "ReplicaSet":
-		return serviceTypeInference
-
-	default:
-		return serviceTypeUnknown
-	}
+	return serviceType(p.podOwnerReferenceToServiceType[ti.Pod.OwnerReferences[0].Kind])
 }
