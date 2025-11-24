@@ -238,6 +238,9 @@ func (p *Plugin) Name() string {
 
 // OnSessionOpen initializes the plugin state.
 func (p *Plugin) OnSessionOpen(ssn *framework.Session) {
+	p.isCardUnlimitedCpuMemory = p.IsCardUnlimitedCpuMemory(ssn)
+	klog.V(4).Infof("IsCardUnlimitedCpuMemory: %v", p.isCardUnlimitedCpuMemory)
+
 	p.buildEventRecorder(ssn)
 	readyToSchedule := p.buildTotalResource(ssn)
 	if readyToSchedule {
