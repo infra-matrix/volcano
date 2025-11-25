@@ -23,10 +23,10 @@ limitations under the License.
 package capacitycard
 
 import (
-	v1 `k8s.io/api/core/v1`
-	`k8s.io/klog/v2`
-	`volcano.sh/apis/pkg/apis/scheduling`
-	`volcano.sh/volcano/pkg/scheduler/api`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"volcano.sh/apis/pkg/apis/scheduling"
+	"volcano.sh/volcano/pkg/scheduler/api"
 )
 
 // PreemptiveFn decides whether the queue can preempt resource for its task.
