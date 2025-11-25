@@ -6,6 +6,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	"volcano.sh/volcano/cmd/scheduler/app/options"
 	"volcano.sh/volcano/pkg/scheduler/actions/reclaim"
@@ -164,6 +165,57 @@ func TestDoesReclaimeeContainReclaimerResource(t *testing.T) {
 }
 
 func TestReclaim(t *testing.T) {
+	// queues
+	cpuMemRes := v1.ResourceList{
+		v1.ResourceCPU:    resource.MustParse("10"),
+		v1.ResourceMemory: resource.MustParse("10Gi"),
+	}
+	cardRes := map[string]string{
+		"volcano.sh/card.quota": `{"NVIDIA-H200":8, "NVIDIA-H20":8}`,
+	}
+	falseVal, trueVal := false, true
+
+	queueInference := util.BuildQueueWithAnnos("q-i", 1, cpuMemRes, cardRes)
+	queueInference.Spec.Reclaimable = &falseVal
+	queueTraining := util.BuildQueueWithAnnos("q-t", 1, cpuMemRes, cardRes)
+	queueTraining.Spec.Reclaimable = &falseVal
+	queueHybrid := util.BuildQueueWithAnnos("q-h", 1, cpuMemRes, cardRes)
+	queueHybrid.Spec.Reclaimable = &trueVal
+
+	// pods
+
+	p1 := util.BuildPod("c1", "preemptee1-1", "n1", v1.PodRunning,
+		api.BuildResourceList("1", "1G", []api.ScalarResource{{Name: "nvidia.com/gpu", Value: "2"}}...), "pg1",
+		map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string))
+	p1.Annotations["volcano.sh/service.type"] = "inference"
+	p1.Annotations["volcano.sh/preemptable"] = "false"
+	p1.Annotations["volcano.sh/card.name"] = "NVIDIA-H200"
+	p1.Annotations["scheduling.volcano.sh/queue-name"] = "q-i"
+
+	p2 := util.BuildPod("c1", "preemptee1-2", "n1", v1.PodRunning,
+		api.BuildResourceList("1", "1G", []api.ScalarResource{{Name: "nvidia.com/gpu", Value: "4"}}...), "pg2",
+		map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string))
+	p2.Annotations["volcano.sh/service.type"] = "training"
+	p2.Annotations["volcano.sh/preemptable"] = "false"
+	p2.Annotations["volcano.sh/card.name"] = "NVIDIA-H200"
+	p2.Annotations["scheduling.volcano.sh/queue-name"] = "q-t"
+
+	p3 := util.BuildPod("c1", "preemptee2-1", "n1", v1.PodRunning,
+		api.BuildResourceList("1", "1G", []api.ScalarResource{{Name: "nvidia.com/gpu", Value: "2"}}...), "pg3",
+		map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string))
+	p3.Annotations["volcano.sh/service.type"] = "training"
+	p3.Annotations["volcano.sh/preemptable"] = "true"
+	p3.Annotations["volcano.sh/card.name"] = "NVIDIA-H200"
+	p3.Annotations["scheduling.volcano.sh/queue-name"] = "q-h"
+
+	p4 := util.BuildPod("c1", "preemptor1", "", v1.PodPending,
+		api.BuildResourceList("1", "1G", []api.ScalarResource{{Name: "nvidia.com/gpu", Value: "2"}}...), "pg4",
+		make(map[string]string), make(map[string]string))
+	p4.Annotations["volcano.sh/service.type"] = "inference"
+	p4.Annotations["volcano.sh/preemptable"] = "false"
+	p4.Annotations["volcano.sh/card.name"] = "NVIDIA-H200"
+	p4.Annotations["scheduling.volcano.sh/queue-name"] = "q-i"
+
 	tests := []uthelper.TestCommonStruct{
 		{
 			Name: "can reclaim when capacity is enough",
@@ -181,46 +233,68 @@ func TestReclaim(t *testing.T) {
 				util.BuildPriorityClass("high-priority", 1000),
 			},
 			PodGroups: []*schedulingv1beta1.PodGroup{
-				util.BuildPodGroupWithPrio("pg1", "c1", "q1", 1, nil, schedulingv1beta1.PodGroupInqueue, "mid-priority"),
-				util.BuildPodGroupWithPrio("pg2", "c1", "q2", 1, nil, schedulingv1beta1.PodGroupInqueue, "low-priority"), // reclaimed first
-				util.BuildPodGroupWithPrio("pg3", "c1", "q3", 1, nil, schedulingv1beta1.PodGroupInqueue, "high-priority"),
+				func() *schedulingv1beta1.PodGroup {
+					pg := util.BuildPodGroupWithAnno("pg1", "c1", "q-i", 1, nil, schedulingv1beta1.PodGroupInqueue, map[string]string{"volcano.sh/service.type": "inference"})
+					pg.Spec.PriorityClassName = "mid-priority"
+					return pg
+				}(),
+				func() *schedulingv1beta1.PodGroup {
+					pg := util.BuildPodGroupWithAnno("pg2", "c1", "q-t", 1, nil, schedulingv1beta1.PodGroupInqueue, map[string]string{"volcano.sh/service.type": "training"})
+					pg.Spec.PriorityClassName = "low-priority"
+					return pg
+				}(),
+				func() *schedulingv1beta1.PodGroup {
+					pg := util.BuildPodGroupWithAnno("pg3", "c1", "q-h", 1, nil, schedulingv1beta1.PodGroupInqueue, map[string]string{"volcano.sh/service.type": "training"})
+					pg.Spec.PriorityClassName = "high-priority"
+					return pg
+				}(),
+				func() *schedulingv1beta1.PodGroup {
+					pg := util.BuildPodGroupWithAnno("pg4", "c1", "q-i", 1, nil, schedulingv1beta1.PodGroupInqueue, map[string]string{"volcano.sh/service.type": "inference"})
+					pg.Spec.PriorityClassName = "high-priority"
+					return pg
+				}(),
 			},
 			Pods: []*v1.Pod{
-				util.BuildPod("c1", "preemptee1-1", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg1", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
-				util.BuildPod("c1", "preemptee1-2", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg1", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
-				util.BuildPod("c1", "preemptee2-1", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg2", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
-				util.BuildPod("c1", "preemptee2-2", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg2", map[string]string{schedulingv1beta1.PodPreemptable: "false"}, make(map[string]string)),
-				util.BuildPod("c1", "preemptor1", "", v1.PodPending, api.BuildResourceList("1", "1G"), "pg3", make(map[string]string), make(map[string]string)),
+				p1, p2, p3, p4,
 			},
 			Nodes: []*v1.Node{
-				util.BuildNode("n1", api.BuildResourceList("4", "4Gi", []api.ScalarResource{{Name: "pods", Value: "10"}}...), make(map[string]string)),
+				util.BuildNode("n1", api.BuildResourceList("40", "40Gi",
+					// scalar resources
+					[]api.ScalarResource{{Name: "pods", Value: "10"},
+						{Name: "nvidia.com/gpu", Value: "8"}}...),
+					// labels
+					map[string]string{
+						"nvidia.com/gpu.product": "NVIDIA-H200",
+						"nvidia.com/gpu.count":   "8",
+						"nvidia.com/gpu.memory":  "81920", // 80GB in MB
+					}),
 			},
 			Queues: []*schedulingv1beta1.Queue{
-				util.BuildQueue("q1", 1, nil),
-				util.BuildQueue("q2", 1, nil),
-				util.BuildQueue("q3", 1, nil),
+				queueInference,
+				queueTraining,
+				queueHybrid,
 			},
 			ExpectEvictNum: 1,
-			ExpectEvicted:  []string{"c1/preemptee2-1"}, // low priority job's preemptable pod is evicted
+			ExpectEvicted:  []string{"c1/preemptee2-1"},
 		},
 	}
 
-	reclaim := reclaim.New()
+	reclaimAction := reclaim.New()
+
 	trueValue := true
 	falseValue := false
 	tiers := []conf.Tier{
 		{
 			Plugins: []conf.PluginOption{
 				{
-					Name: priority.PluginName,
-					// EnabledJobOrder:  &trueValue,
-					// EnabledTaskOrder: &trueValue,
+					Name:             priority.PluginName,
+					EnabledJobOrder:  &trueValue,
+					EnabledTaskOrder: &trueValue,
 				},
 				{
-					Name: gang.PluginName,
-					// EnabledReclaimable: &trueValue,
-					// EnabledJobStarving: &trueValue,
-					EnablePreemptive: &falseValue,
+					Name:               gang.PluginName,
+					EnabledJobStarving: &trueValue,
+					EnablePreemptive:   &falseValue,
 				},
 				{
 					Name: conformance.PluginName,
@@ -244,6 +318,11 @@ func TestReclaim(t *testing.T) {
 					EnabledReclaimable: &trueValue,
 					Arguments: map[string]interface{}{
 						cardUnlimitedCpuMemory: true,
+						"podOwnerReferenceToServiceType": map[string]string{
+							"ReplicaSet": "inference",
+							"Deployment": "inference",
+							"Job":        "training",
+						},
 					},
 				},
 			},
@@ -253,7 +332,7 @@ func TestReclaim(t *testing.T) {
 		t.Run(test.Name, func(t *testing.T) {
 			test.RegisterSession(tiers, nil)
 			defer test.Close()
-			test.Run([]framework.Action{reclaim})
+			test.Run([]framework.Action{reclaimAction})
 			if err := test.CheckAll(i); err != nil {
 				t.Fatal(err)
 			}

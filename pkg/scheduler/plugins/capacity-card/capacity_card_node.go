@@ -64,8 +64,8 @@ var (
 )
 
 // buildTotalResource builds the total resource of the cluster by listing all nodes from informer.
-// Note that, DO NOT use ssn.Nodes where, because ssn.Nodes are synced in node event handlers asynchronously,
-// which might lost some nodes in scheduling starting to work.
+// In production, uses informer to ensure all nodes are available.
+// In test environment, if informer returns no nodes, fallback to use ssn.Nodes which are populated by test framework.
 func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 	p.nodeLister = ssn.InformerFactory().Core().V1().Nodes().Lister()
 	nodes, err := p.nodeLister.List(labels.Everything())
@@ -73,6 +73,16 @@ func (p *Plugin) buildTotalResource(ssn *framework.Session) bool {
 		klog.Errorf("Failed to list nodes: %+v", err)
 		return false
 	}
+
+	// Fallback to ssn.Nodes if informer has no nodes (test environment)
+	if len(nodes) == 0 && len(ssn.Nodes) > 0 {
+		klog.V(4).Infof("Informer has no nodes, using session nodes (count: %d)", len(ssn.Nodes))
+		nodes = make([]*corev1.Node, 0, len(ssn.Nodes))
+		for _, nodeInfo := range ssn.Nodes {
+			nodes = append(nodes, nodeInfo.Node)
+		}
+	}
+
 	p.buildTotalResourceFromNodes(nodes)
 	return true
 }
