@@ -153,6 +153,116 @@ func TestDoesReclaimeeContainReclaimerResource(t *testing.T) {
 
 			expectedContains: false,
 		},
+		{
+			name: "Reclaimee with emptyresource cat not contains reclaim reclaimee with resource",
+			reclaimerRes: func() *api.Resource {
+				res := api.EmptyResource()
+
+				return res
+			}(),
+			reclaimeeRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.MilliCPU = 2000
+				res.Memory = 4096
+				return res
+			}(),
+
+			expectedContains: false,
+		},
+		{
+			name: "reclaimer want H200 can not  reclaim reclaimee with 4090",
+			reclaimerRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"H200": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+
+				return res
+			}(),
+			reclaimeeRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"4090": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+				return res
+			}(),
+
+			expectedContains: false,
+		},
+		{
+			name: "reclaimer want H200 can  reclaim reclaimee with 4090 and H200",
+			reclaimerRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"H200": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+
+				return res
+			}(),
+			reclaimeeRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"H200": 4,
+					"4090": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+
+				return res
+			}(),
+
+			expectedContains: true,
+		},
+		{
+			name: "reclaimer want cpu and meme can not  reclaim reclaimee with scalarResources",
+			reclaimerRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.MilliCPU = 2000
+				res.Memory = 4096
+
+				return res
+			}(),
+			reclaimeeRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"H200": 4,
+					"4090": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+				return res
+			}(),
+
+			expectedContains: false,
+		},
+		{
+			name: "reclaimer want scalarResources can not  reclaim reclaimee without scalarResources",
+			reclaimerRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.ScalarResources = map[v1.ResourceName]float64{
+					"H200": 4,
+					"4090": 4,
+				}
+				res.MilliCPU = 2000
+				res.Memory = 4096
+
+				return res
+			}(),
+			reclaimeeRes: func() *api.Resource {
+				res := api.EmptyResource()
+				res.MilliCPU = 2000
+				res.Memory = 4096
+				return res
+			}(),
+
+			expectedContains: false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

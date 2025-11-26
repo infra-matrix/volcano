@@ -132,20 +132,24 @@ func (p *Plugin) getTaskServiceType(ssn *framework.Session, ti *api.TaskInfo) se
 // DoesReclaimeeContainReclaimerResource Determine if the reclaimee contains the resources required by the reclaimer.
 // It can be preempted as long as any resource is available.
 func DoesReclaimeeContainReclaimerResource(reclaimerReq, reclaimeeReq *api.Resource) bool {
-	if reclaimerReq.MilliCPU > 0 && reclaimeeReq.MilliCPU > 0 {
-		return true
-	}
-
-	if reclaimerReq.Memory > 0 && reclaimeeReq.Memory > 0 {
-		return true
-	}
-
 	for rName, rQuantity := range reclaimerReq.ScalarResources {
 		if rQuantity > 0 {
 			if reclaimeeQuantity, found := reclaimeeReq.ScalarResources[rName]; found && reclaimeeQuantity > 0 {
 				return true
 			}
 		}
+	}
+
+	if len(reclaimerReq.ScalarResources) > 0 || len(reclaimeeReq.ScalarResources) > 0 {
+		return false
+	}
+
+	if reclaimerReq.MilliCPU > 0 && reclaimeeReq.MilliCPU > 0 {
+		return true
+	}
+
+	if reclaimerReq.Memory > 0 && reclaimeeReq.Memory > 0 {
+		return true
 	}
 
 	return false
