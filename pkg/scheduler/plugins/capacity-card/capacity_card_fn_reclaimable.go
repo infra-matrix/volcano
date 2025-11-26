@@ -23,10 +23,11 @@ limitations under the License.
 package capacitycard
 
 import (
-	`k8s.io/klog/v2`
-	`volcano.sh/volcano/pkg/scheduler/api`
-	`volcano.sh/volcano/pkg/scheduler/framework`
-	`volcano.sh/volcano/pkg/scheduler/plugins/util`
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/plugins/util"
 )
 
 const (
@@ -57,6 +58,20 @@ func (p *Plugin) ReclaimableFn(
 	if reclaimerServiceType == serviceTypeTraining {
 		return victims, util.Permit
 	}
+	reclaimerReqResource, err := p.GetTaskRequestResources(reclaimer)
+	if err != nil {
+		klog.V(5).Infof(
+			"Get request resource for Task <%s/%s> failed, error: <%s>",
+			reclaimer.Namespace, reclaimer.Name, err.Error(),
+		)
+		if reclaimer.Pod != nil {
+			eventRecorder.Eventf(
+				reclaimer.Pod, v1.EventTypeWarning, EventTypeGetTaskRequestResourceFailed,
+				"Get request resource failed,  error: <%s>", err.Error(),
+			)
+		}
+		return victims, util.Permit
+	}
 	for _, reclaimee := range reclaimees {
 		reclaimeeServiceType := p.getTaskServiceType(ssn, reclaimee)
 		if reclaimeeServiceType == serviceTypeInference {
@@ -69,7 +84,25 @@ func (p *Plugin) ReclaimableFn(
 			continue
 		}
 
-		victims = append(victims, reclaimee)
+		reclaimeeReqResource, err := p.GetTaskRequestResources(reclaimee)
+		if err != nil {
+			klog.V(5).Infof(
+				"Get request resource for Task <%s/%s> failed, error: <%s>",
+				reclaimee.Namespace, reclaimee.Name, err.Error(),
+			)
+			continue
+		}
+		if !DoesReclaimeeContainReclaimerResource(reclaimerReqResource, reclaimeeReqResource) {
+			klog.V(5).Infof(
+				"Reclaimee %s <%+v> Does not contain required resources of reclaimer %s <%+v>, skip it",
+				reclaimee.Name, reclaimeeReqResource, reclaimer.Name, reclaimerReqResource,
+			)
+			continue
+		}
+
+		if reclaimeeServiceType == serviceTypeTraining {
+			victims = append(victims, reclaimee)
+		}
 	}
 	klog.V(4).Infof("reclaimer: %s, victims: %+v", reclaimer, victims)
 	return victims, util.Permit
@@ -94,4 +127,39 @@ func (p *Plugin) getTaskServiceType(ssn *framework.Session, ti *api.TaskInfo) se
 		return serviceTypeUnknown
 	}
 	return serviceType(p.podOwnerReferenceToServiceType[ti.Pod.OwnerReferences[0].Kind])
+}
+
+// DoesReclaimeeContainReclaimerResource Determine if the reclaimee contains the resources required by the reclaimer.
+// return false if reclaimer with scalarResources but reclaimee without scalarResources.
+// return false if reclaimer without scalarResources but reclaimee with scalarResources.
+// return true if reclaimee contains at least one scalarResources required by reclaimer.
+func DoesReclaimeeContainReclaimerResource(reclaimerReq, reclaimeeReq *api.Resource) bool {
+	// reclaimer with scalarResources
+	if len(reclaimerReq.ScalarResources) > 0 {
+		for rName, rQuantity := range reclaimerReq.ScalarResources {
+			if rQuantity > 0 {
+				if reclaimeeQuantity, found := reclaimeeReq.ScalarResources[rName]; found && reclaimeeQuantity > 0 {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+	// reclaimer without scalarResources
+
+	// reclaimee with scalarResources
+	if len(reclaimeeReq.ScalarResources) > 0 {
+		return false
+	}
+
+	if reclaimerReq.MilliCPU > 0 && reclaimeeReq.MilliCPU > 0 {
+		return true
+	}
+
+	if reclaimerReq.Memory > 0 && reclaimeeReq.Memory > 0 {
+		return true
+	}
+
+	return false
 }
