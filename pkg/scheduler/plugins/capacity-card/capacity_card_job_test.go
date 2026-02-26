@@ -822,6 +822,216 @@ func TestGetCardResourceFromTaskPod(t *testing.T) {
 			expectedError: true,
 			description:   "Should return error when pod is nil",
 		},
+		{
+			name: "vGPU card with resources in requests",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-cores":  "volcano.sh/vgpu-cores",
+					"NVIDIA-A100/vgpu-memory": "volcano.sh/vgpu-memory",
+					"NVIDIA-A100/vgpu-number": "volcano.sh/vgpu-number",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-cores":  resource.MustParse("4"),
+									"volcano.sh/vgpu-memory": resource.MustParse("8192"),
+									"volcano.sh/vgpu-number": resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedCard:  "NVIDIA-A100/vgpu-cores",
+			expectedQty:   4000, // 4 * 1 * 1000
+			expectedError: false,
+			description:   "Should get vGPU resources from requests with cores and memory multiplied by number",
+		},
+		{
+			name: "vGPU card with resources in limits",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-cores":  "volcano.sh/vgpu-cores",
+					"NVIDIA-A100/vgpu-memory": "volcano.sh/vgpu-memory",
+					"NVIDIA-A100/vgpu-number": "volcano.sh/vgpu-number",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Limits: v1.ResourceList{
+									"volcano.sh/vgpu-cores":  resource.MustParse("8"),
+									"volcano.sh/vgpu-memory": resource.MustParse("16384"),
+									"volcano.sh/vgpu-number": resource.MustParse("2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedCard:  "NVIDIA-A100/vgpu-cores",
+			expectedQty:   16000, // 8 * 2 * 1000
+			expectedError: false,
+			description:   "Should get vGPU resources from limits with cores and memory multiplied by number",
+		},
+		{
+			name: "vGPU card with non-existent resource in pool",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-cores": resource.MustParse("4"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: true,
+			description:   "Should return error when vGPU resource not found in pool",
+		},
+		{
+			name: "vGPU card with empty product name",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{},
+			},
+			cardName: "/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-cores": resource.MustParse("4"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: true,
+			description:   "Should return error when vGPU card name has empty product",
+		},
+		{
+			name: "vGPU card without resources",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-cores": "volcano.sh/vgpu-cores",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: true,
+			description:   "Should return error when no vGPU resources found",
+		},
+		{
+			name: "vGPU card with all three resources",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-cores":  "volcano.sh/vgpu-cores",
+					"NVIDIA-A100/vgpu-memory": "volcano.sh/vgpu-memory",
+					"NVIDIA-A100/vgpu-number": "volcano.sh/vgpu-number",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-cores":  resource.MustParse("8"),
+									"volcano.sh/vgpu-memory": resource.MustParse("16384"),
+									"volcano.sh/vgpu-number": resource.MustParse("2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedCard:  "NVIDIA-A100/vgpu-cores",
+			expectedQty:   16000, // 8 * 2 * 1000
+			expectedError: false,
+			description:   "Should get all three vGPU resources with cores and memory multiplied by number",
+		},
+		{
+			name: "vGPU card with only vgpu-memory",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-memory": "volcano.sh/vgpu-memory",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-memory": resource.MustParse("16384"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedCard:  "NVIDIA-A100/vgpu-memory",
+			expectedQty:   16384000,
+			expectedError: false,
+			description:   "Should get only vgpu-memory resource",
+		},
+		{
+			name: "vGPU card with only vgpu-number",
+			plugin: &Plugin{
+				cardNameToResourceName: map[v1.ResourceName]v1.ResourceName{
+					"NVIDIA-A100/vgpu-number": "volcano.sh/vgpu-number",
+				},
+			},
+			cardName: "NVIDIA-A100/vgpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									"volcano.sh/vgpu-number": resource.MustParse("2"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedCard:  "NVIDIA-A100/vgpu-number",
+			expectedQty:   2000,
+			expectedError: false,
+			description:   "Should get only vgpu-number resource",
+		},
 	}
 
 	for _, tt := range tests {
@@ -840,10 +1050,12 @@ func TestGetCardResourceFromTaskPod(t *testing.T) {
 				return
 			}
 
-			if qty, ok := res.ScalarResources[tt.expectedCard]; !ok {
-				t.Errorf("Expected card resource %v", tt.expectedCard)
-			} else if qty != tt.expectedQty {
-				t.Errorf("Expected card quantity %v, got %v", tt.expectedQty, qty)
+			if tt.expectedCard != "" {
+				if qty, ok := res.ScalarResources[tt.expectedCard]; !ok {
+					t.Errorf("Expected card resource %v", tt.expectedCard)
+				} else if qty != tt.expectedQty {
+					t.Errorf("Expected card quantity %v, got %v", tt.expectedQty, qty)
+				}
 			}
 		})
 	}

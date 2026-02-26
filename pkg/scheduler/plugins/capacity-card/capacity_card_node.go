@@ -61,6 +61,12 @@ var (
 	// nodeCardProductLabelRegex is used to extract card product information from node labels.
 	// car product label is necessary to get card name, count and memory.
 	nodeCardProductLabelRegex = regexp.MustCompile(`^((.+?)/(\w+))\.product$`)
+
+	// vGPU resource constants
+	ResourcePrefix         = "volcano.sh"
+	VGPUCoresResourceName  = "volcano.sh/vgpu-cores"
+	VGPUMemoryResourceName = "volcano.sh/vgpu-memory"
+	VGPUNumberResourceName = "volcano.sh/vgpu-number"
 )
 
 // buildTotalResource builds the total resource of the cluster by listing all nodes from informer.
@@ -166,6 +172,17 @@ func (p *Plugin) getCardResourceFromNode(node *corev1.Node) NodeCardResourceInfo
 			nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
 			nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
 			continue
+		}
+
+		// vGPU resources: only parse specified vGPU resources
+		switch string(resName) {
+		case VGPUCoresResourceName, VGPUMemoryResourceName, VGPUNumberResourceName:
+			// Extract vGPU resource type (cores, memory, number)
+			vgpuResourceType := strings.TrimPrefix(string(resName), ResourcePrefix)
+			// Map to {product}/vgpu-{type} format
+			cardResourceName := corev1.ResourceName(fmt.Sprintf("%s%s", nodeCardInfo.CardInfo.Name, vgpuResourceType))
+			nodeCardInfo.CardResource[cardResourceName] = cardCapacity.DeepCopy()
+			nodeCardInfo.CardNameToResourceName[cardResourceName] = resName
 		}
 
 		// 1. whole card resource

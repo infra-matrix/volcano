@@ -175,15 +175,12 @@ func (p *Plugin) getCardResourceFromNodeNameForMultiCardTask(
 		)
 	}
 	var (
-		nodeCardInfo   = p.getCardResourceFromNode(node)
 		multiCardNames = strings.Split(multiCardName, MultiCardSeparator)
 	)
 	for _, singleCardName := range multiCardNames {
-		if _, ok := nodeCardInfo.CardNameToResourceName[v1.ResourceName(singleCardName)]; ok {
-			podCardResource, err := p.getCardResourceFromTaskPod(singleCardName, ti.Pod)
-			if err == nil {
-				return podCardResource, nil
-			}
+		podCardResource, err := p.getCardResourceFromTaskPod(singleCardName, ti.Pod)
+		if err == nil {
+			return podCardResource, nil
 		}
 	}
 	return api.EmptyResource(), fmt.Errorf(
@@ -198,6 +195,72 @@ func (p *Plugin) getCardResourceFromTaskPod(cardName string, pod *v1.Pod) (*api.
 		return api.EmptyResource(), fmt.Errorf("invalid parameter: pod is nil")
 	}
 
+	// handle vGPU card name (ends with /vgpu)
+	if strings.HasSuffix(cardName, "/vgpu") {
+		// extract product name from cardName (remove /vgpu suffix)
+		productName := strings.TrimSuffix(cardName, "/vgpu")
+		if productName == "" {
+			return api.EmptyResource(), fmt.Errorf("invalid card name for vGPU: %s", cardName)
+		}
+
+		// retrieve vGPU resources from requests/limits
+		podRequests, podLimits := resourcehelper.PodRequestsAndLimits(pod)
+		scalarResources := make(map[v1.ResourceName]float64)
+
+		// map vGPU resources
+		vgpuResources := map[string]string{
+			VGPUCoresResourceName:  "vgpu-cores",
+			VGPUMemoryResourceName: "vgpu-memory",
+			VGPUNumberResourceName: "vgpu-number",
+		}
+
+		for vgpuRes, resType := range vgpuResources {
+			// check limits first, then requests
+			if quantity, found := podLimits[v1.ResourceName(vgpuRes)]; found {
+				mappedResName := v1.ResourceName(fmt.Sprintf("%s/%s", productName, resType))
+				scalarResources[mappedResName] = float64(quantity.Value() * cardCountQuantityMultiplier)
+			} else if quantity, found := podRequests[v1.ResourceName(vgpuRes)]; found {
+				mappedResName := v1.ResourceName(fmt.Sprintf("%s/%s", productName, resType))
+				scalarResources[mappedResName] = float64(quantity.Value() * cardCountQuantityMultiplier)
+			}
+		}
+
+		if len(scalarResources) == 0 {
+			return api.EmptyResource(), fmt.Errorf("no vGPU resources found in requests/limits for card %s", cardName)
+		}
+
+		// Multiply vgpu-cores and vgpu-memory by vgpu-number
+		vgpuNumberKey := v1.ResourceName(fmt.Sprintf("%s/vgpu-number", productName))
+		if vgpuNumber, ok := scalarResources[vgpuNumberKey]; ok && vgpuNumber > 0 {
+			// Calculate vgpu-number value in original unit (divide by cardCountQuantityMultiplier)
+			vgpuNumberValue := vgpuNumber / float64(cardCountQuantityMultiplier)
+
+			// Multiply vgpu-cores by vgpu-number
+			vgpuCoresKey := v1.ResourceName(fmt.Sprintf("%s/vgpu-cores", productName))
+			if vgpuCores, ok := scalarResources[vgpuCoresKey]; ok && vgpuCores > 0 {
+				scalarResources[vgpuCoresKey] = vgpuCores * vgpuNumberValue
+			}
+
+			// Multiply vgpu-memory by vgpu-number
+			vgpuMemoryKey := v1.ResourceName(fmt.Sprintf("%s/vgpu-memory", productName))
+			if vgpuMemory, ok := scalarResources[vgpuMemoryKey]; ok && vgpuMemory > 0 {
+				scalarResources[vgpuMemoryKey] = vgpuMemory * vgpuNumberValue
+			}
+		}
+
+		// check if the mapped vGPU resource names are in the resource pool (only for non-zero values)
+		for resName := range scalarResources {
+			if _, ok := p.cardNameToResourceName[resName]; !ok {
+				return api.EmptyResource(), fmt.Errorf("vGPU resource %s not found in resource pool", resName)
+			}
+		}
+
+		return &api.Resource{
+			ScalarResources: scalarResources,
+		}, nil
+	}
+
+	// handle regular card name
 	// retrieve card resource name from requests/limits.
 	// eg: cardName is "NVIDIA-H200", the resource name in requests/limits is "nvidia.com/gpu".
 	cardResourceName, ok := p.cardNameToResourceName[v1.ResourceName(cardName)]
