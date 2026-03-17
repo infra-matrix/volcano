@@ -224,6 +224,7 @@ func (pp *predicatesPlugin) OnSessionOpen(ssn *framework.Session) {
 					err := devices.Allocate(ssn.KubeClient(), pod)
 					if err != nil {
 						klog.Errorf("AllocateToPod failed %s", err.Error())
+						event.Err = err
 						return
 					}
 				} else {
