@@ -22,14 +22,17 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
+	"volcano.sh/volcano/cmd/scheduler/app/options"
 	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/util"
 )
 
 type PredicateHelper interface {
-	PredicateNodes(task *api.TaskInfo, nodes []*api.NodeInfo, fn api.PredicateFn, enableErrorCache bool) ([]*api.NodeInfo, *api.FitErrors)
+	PredicateNodes(task *api.TaskInfo, nodes []*api.NodeInfo, fn api.PredicateFn, enableErrorCache bool, nodesInShard sets.Set[string]) ([]*api.NodeInfo, *api.FitErrors)
 }
 
 type predicateHelper struct {
@@ -37,7 +40,7 @@ type predicateHelper struct {
 }
 
 // PredicateNodes returns the specified number of nodes that fit a task
-func (ph *predicateHelper) PredicateNodes(task *api.TaskInfo, nodes []*api.NodeInfo, fn api.PredicateFn, enableErrorCache bool) ([]*api.NodeInfo, *api.FitErrors) {
+func (ph *predicateHelper) PredicateNodes(task *api.TaskInfo, nodes []*api.NodeInfo, fn api.PredicateFn, enableErrorCache bool, nodesInShard sets.Set[string]) ([]*api.NodeInfo, *api.FitErrors) {
 	var errorLock sync.RWMutex
 	fe := api.NewFitErrors()
 
@@ -66,13 +69,15 @@ func (ph *predicateHelper) PredicateNodes(task *api.TaskInfo, nodes []*api.NodeI
 		nodeErrorCache = map[string]error{}
 	}
 
+	startIndex := int(lastProcessedNodeIndex.Load())
+
 	//create a context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 
 	checkNode := func(index int) {
 		// Check the nodes starting from where is left off in the previous scheduling cycle,
 		// to make sure all nodes have the same chance of being examined across pods.
-		node := nodes[(lastProcessedNodeIndex+index)%allNodes]
+		node := nodes[(startIndex+index)%allNodes]
 		atomic.AddInt32(&processedNodes, 1)
 		klog.V(4).Infof("Considering Task <%v/%v> on node <%v>: <%v> vs. <%v>",
 			task.Namespace, task.Name, node.Name, task.Resreq, node.Idle)
@@ -90,6 +95,17 @@ func (ph *predicateHelper) PredicateNodes(task *api.TaskInfo, nodes []*api.NodeI
 				errorLock.Unlock()
 				return
 			}
+		}
+
+		if options.ServerOpts.ShardingMode == util.HardShardingMode && !nodesInShard.Has(node.Name) {
+			klog.V(3).Infof("Predicates failed: node %s is not in scheduler shard", node.Name)
+			err := fmt.Errorf("node isn't in scheduler node shard")
+			errorLock.Lock()
+			nodeErrorCache[node.Name] = err
+			ph.taskPredicateErrorCache[taskGroupid] = nodeErrorCache
+			fe.SetNodeError(node.Name, err)
+			errorLock.Unlock()
+			return
 		}
 
 		// TODO (k82cn): Enable eCache for performance improvement.
@@ -116,8 +132,9 @@ func (ph *predicateHelper) PredicateNodes(task *api.TaskInfo, nodes []*api.NodeI
 	//workqueue.ParallelizeUntil(context.TODO(), 16, len(nodes), checkNode)
 	workqueue.ParallelizeUntil(ctx, 16, allNodes, checkNode)
 
-	//processedNodes := int(numFoundNodes) + len(filteredNodesStatuses) + len(failedPredicateMap)
-	lastProcessedNodeIndex = (lastProcessedNodeIndex + int(processedNodes)) % allNodes
+	newIndex := int64((startIndex + int(processedNodes)) % allNodes)
+	lastProcessedNodeIndex.Store(newIndex)
+
 	predicateNodes = predicateNodes[:numFoundNodes]
 	return predicateNodes, fe
 }
@@ -128,4 +145,22 @@ func taskGroupID(task *api.TaskInfo) string {
 
 func NewPredicateHelper() PredicateHelper {
 	return &predicateHelper{taskPredicateErrorCache: map[string]map[string]error{}}
+}
+
+// GetPredicatedNodeByShard return predicateNodes by shard
+func GetPredicatedNodeByShard(predicateNodes []*api.NodeInfo, nodesInShard sets.Set[string]) [2][]*api.NodeInfo {
+	var candidateNodes [2][]*api.NodeInfo
+	var candidateNodesInShard []*api.NodeInfo
+	var candidateNodesInOtherShards []*api.NodeInfo
+	shardingMode := options.ServerOpts.ShardingMode
+	for _, node := range predicateNodes {
+		if shardingMode == util.SoftShardingMode && nodesInShard != nil && !nodesInShard.Has(node.Name) {
+			candidateNodesInOtherShards = append(candidateNodesInOtherShards, node)
+		} else {
+			candidateNodesInShard = append(candidateNodesInShard, node)
+		}
+	}
+	candidateNodes[0] = candidateNodesInShard
+	candidateNodes[1] = candidateNodesInOtherShards
+	return candidateNodes
 }

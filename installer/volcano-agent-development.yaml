@@ -126,9 +126,13 @@ spec:
           hostPath:
             path: /proc/stat
             type: File
+        - name: proc-meminfo
+          hostPath:
+            path: /proc/meminfo
+            type: File
       initContainers:
         - name: volcano-agent-init
-          image: docker.io/volcanosh/vc-agent:v1.13.0
+          image: docker.io/volcanosh/vc-agent:v1.14.3
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -159,7 +163,7 @@ spec:
           imagePullPolicy: Always
       containers:
         - name: volcano-agent
-          image: docker.io/volcanosh/vc-agent:v1.13.0
+          image: docker.io/volcanosh/vc-agent:v1.14.3
           securityContext:
             capabilities:
               add:
@@ -221,6 +225,13 @@ spec:
             - name: proc-stat
               readOnly: true
               mountPath: /host/proc/stat
+            - name: proc-meminfo
+              readOnly: true
+              mountPath: /host/proc/meminfo
+          ports:
+            - name: metrics
+              containerPort: 3300
+              protocol: TCP
           livenessProbe:
             httpGet:
               path: /healthz

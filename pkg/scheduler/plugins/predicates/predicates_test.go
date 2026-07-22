@@ -17,11 +17,28 @@ limitations under the License.
 package predicates
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8sframework "k8s.io/kube-scheduler/framework"
+	schedframework "k8s.io/kubernetes/pkg/scheduler/framework"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/dynamicresources"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/interpodaffinity"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodeaffinity"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodeports"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodeunschedulable"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodevolumelimits"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/podtopologyspread"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/tainttoleration"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/volumezone"
 
 	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 
@@ -29,13 +46,47 @@ import (
 	"volcano.sh/volcano/pkg/scheduler/actions/backfill"
 	"volcano.sh/volcano/pkg/scheduler/actions/preempt"
 	"volcano.sh/volcano/pkg/scheduler/api"
+	"volcano.sh/volcano/pkg/scheduler/cache"
+	vbcap "volcano.sh/volcano/pkg/scheduler/capabilities/volumebinding"
 	"volcano.sh/volcano/pkg/scheduler/conf"
 	"volcano.sh/volcano/pkg/scheduler/framework"
 	"volcano.sh/volcano/pkg/scheduler/plugins/gang"
 	"volcano.sh/volcano/pkg/scheduler/plugins/priority"
+	"volcano.sh/volcano/pkg/scheduler/plugins/util/k8s"
 	"volcano.sh/volcano/pkg/scheduler/uthelper"
 	"volcano.sh/volcano/pkg/scheduler/util"
 )
+
+type fakeFilterPlugin struct {
+	name    string
+	message string
+}
+
+func (p *fakeFilterPlugin) Name() string {
+	return p.name
+}
+
+func (p *fakeFilterPlugin) Filter(_ context.Context, _ k8sframework.CycleState, _ *apiv1.Pod, _ k8sframework.NodeInfo) *k8sframework.Status {
+	return k8sframework.NewStatus(k8sframework.Unschedulable, p.message)
+}
+
+type fakeReservePlugin struct {
+	name  string
+	calls *[]string
+}
+
+func (p *fakeReservePlugin) Name() string {
+	return p.name
+}
+
+func (p *fakeReservePlugin) Reserve(_ context.Context, _ k8sframework.CycleState, _ *apiv1.Pod, _ string) *k8sframework.Status {
+	*p.calls = append(*p.calls, "reserve-"+p.name)
+	return k8sframework.NewStatus(k8sframework.Success)
+}
+
+func (p *fakeReservePlugin) Unreserve(_ context.Context, _ k8sframework.CycleState, _ *apiv1.Pod, _ string) {
+	*p.calls = append(*p.calls, "unreserve-"+p.name)
+}
 
 func getWorkerAffinity() *apiv1.Affinity {
 	return &apiv1.Affinity{
@@ -278,4 +329,368 @@ func TestPodAntiAffinity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetUpDynamicResourcesArgs_Default(t *testing.T) {
+	dra := defaultDynamicResourcesArgs()
+	setUpDynamicResourcesArgs(dra, nil)
+
+	assert.Equal(t, &metav1.Duration{Duration: defaultDRAFilterTimeout}, dra.FilterTimeout)
+}
+
+func TestSetUpDynamicResourcesArgs_OverideSeconds(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawArgs     framework.Arguments
+		expectedDur time.Duration
+	}{
+		{
+			name:        "override with seconds (int)",
+			rawArgs:     framework.Arguments{draFilterTimeoutSecondsKey: 3},
+			expectedDur: 3 * time.Second,
+		},
+		{
+			name:        "ignore negative seconds",
+			rawArgs:     framework.Arguments{draFilterTimeoutSecondsKey: -5},
+			expectedDur: defaultDRAFilterTimeout,
+		},
+		{
+			name:        "no key keeps default",
+			rawArgs:     framework.Arguments{},
+			expectedDur: defaultDRAFilterTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dra := defaultDynamicResourcesArgs()
+			setUpDynamicResourcesArgs(dra, tt.rawArgs)
+			assert.Equal(t, &metav1.Duration{Duration: tt.expectedDur}, dra.FilterTimeout)
+		})
+	}
+}
+
+func TestInitPlugin(t *testing.T) {
+	tests := []struct {
+		name                    string
+		enableNodeAffinity      bool
+		enableNodePorts         bool
+		enableTaintToleration   bool
+		enablePodAffinity       bool
+		enableNodeVolumeLimits  bool
+		enableVolumeZone        bool
+		enablePodTopologySpread bool
+		enableVolumeBinding     bool
+		enableDRA               bool
+		expectInFilter          []string
+		expectInStableFilter    []string
+		expectInPrefilter       []string
+		expectInReserve         []string
+		expectInPreBind         []string
+		expectInScore           []string
+		expectNotInFilter       []string
+		expectNotInReserve      []string
+		expectNotInPreBind      []string
+		expectNotInScore        []string
+	}{
+		{
+			name:                    "all default plugins enabled without volume binding and dra",
+			enableNodeAffinity:      true,
+			enableNodePorts:         true,
+			enableTaintToleration:   true,
+			enablePodAffinity:       true,
+			enableNodeVolumeLimits:  true,
+			enableVolumeZone:        true,
+			enablePodTopologySpread: true,
+			enableVolumeBinding:     false,
+			enableDRA:               false,
+			expectInFilter:          []string{nodeunschedulable.Name, nodeaffinity.Name, nodeports.Name, tainttoleration.Name, interpodaffinity.Name, nodevolumelimits.CSIName, volumezone.Name, podtopologyspread.Name},
+			expectInStableFilter:    []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name},
+			expectInPrefilter:       []string{nodeports.Name, interpodaffinity.Name, podtopologyspread.Name},
+			expectInReserve:         []string{},
+			expectInPreBind:         []string{},
+			expectInScore:           []string{},
+			expectNotInFilter:       []string{vbcap.Name, dynamicresources.Name},
+			expectNotInReserve:      []string{vbcap.Name, dynamicresources.Name},
+			expectNotInPreBind:      []string{vbcap.Name, dynamicresources.Name},
+			expectNotInScore:        []string{vbcap.Name},
+		},
+		{
+			name:                    "volume binding enabled",
+			enableNodeAffinity:      true,
+			enableNodePorts:         false,
+			enableTaintToleration:   true,
+			enablePodAffinity:       false,
+			enableNodeVolumeLimits:  false,
+			enableVolumeZone:        false,
+			enablePodTopologySpread: false,
+			enableVolumeBinding:     true,
+			enableDRA:               false,
+			expectInFilter:          []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name, vbcap.Name},
+			expectInStableFilter:    []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name},
+			expectInPrefilter:       []string{vbcap.Name},
+			expectInReserve:         []string{vbcap.Name},
+			expectInPreBind:         []string{vbcap.Name},
+			expectInScore:           []string{vbcap.Name},
+			expectNotInFilter:       []string{nodeports.Name, interpodaffinity.Name, dynamicresources.Name},
+			expectNotInReserve:      []string{dynamicresources.Name},
+			expectNotInPreBind:      []string{dynamicresources.Name},
+		},
+		{
+			name:                    "dra enabled",
+			enableNodeAffinity:      true,
+			enableNodePorts:         false,
+			enableTaintToleration:   true,
+			enablePodAffinity:       false,
+			enableNodeVolumeLimits:  false,
+			enableVolumeZone:        false,
+			enablePodTopologySpread: false,
+			enableVolumeBinding:     false,
+			enableDRA:               true,
+			expectInFilter:          []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name, dynamicresources.Name},
+			expectInStableFilter:    []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name},
+			expectInPrefilter:       []string{dynamicresources.Name},
+			expectInReserve:         []string{dynamicresources.Name},
+			expectInPreBind:         []string{dynamicresources.Name},
+			expectInScore:           []string{},
+			expectNotInFilter:       []string{vbcap.Name},
+			expectNotInReserve:      []string{vbcap.Name},
+			expectNotInPreBind:      []string{vbcap.Name},
+			expectNotInScore:        []string{dynamicresources.Name, vbcap.Name},
+		},
+		{
+			name:                    "both volume binding and dra enabled",
+			enableNodeAffinity:      true,
+			enableNodePorts:         true,
+			enableTaintToleration:   true,
+			enablePodAffinity:       true,
+			enableNodeVolumeLimits:  true,
+			enableVolumeZone:        true,
+			enablePodTopologySpread: true,
+			enableVolumeBinding:     true,
+			enableDRA:               true,
+			expectInFilter:          []string{nodeunschedulable.Name, nodeaffinity.Name, nodeports.Name, tainttoleration.Name, interpodaffinity.Name, nodevolumelimits.CSIName, volumezone.Name, podtopologyspread.Name, vbcap.Name, dynamicresources.Name},
+			expectInStableFilter:    []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name},
+			expectInPrefilter:       []string{nodeports.Name, interpodaffinity.Name, podtopologyspread.Name, vbcap.Name, dynamicresources.Name},
+			expectInReserve:         []string{vbcap.Name, dynamicresources.Name},
+			expectInPreBind:         []string{vbcap.Name, dynamicresources.Name},
+			expectInScore:           []string{vbcap.Name},
+			expectNotInScore:        []string{dynamicresources.Name},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset volume binding plugin for test isolation
+			ResetVolumeBindingPluginForTest()
+
+			pp := New(nil).(*PredicatesPlugin)
+			pp.enabledPredicates.nodeAffinityEnable = tt.enableNodeAffinity
+			pp.enabledPredicates.nodePortEnable = tt.enableNodePorts
+			pp.enabledPredicates.taintTolerationEnable = tt.enableTaintToleration
+			pp.enabledPredicates.podAffinityEnable = tt.enablePodAffinity
+			pp.enabledPredicates.nodeVolumeLimitsEnable = tt.enableNodeVolumeLimits
+			pp.enabledPredicates.volumeZoneEnable = tt.enableVolumeZone
+			pp.enabledPredicates.podTopologySpreadEnable = tt.enablePodTopologySpread
+			pp.enabledPredicates.volumeBindingEnable = tt.enableVolumeBinding
+			pp.enabledPredicates.dynamicResourceAllocationEnable = tt.enableDRA
+
+			nodeMap := map[string]k8sframework.NodeInfo{}
+			client := k8sfake.NewSimpleClientset()
+			informerFactory := informers.NewSharedInformerFactory(client, 0)
+			pp.Handle = k8s.NewFramework(
+				nodeMap,
+				k8s.WithClientSet(client),
+				k8s.WithInformerFactory(informerFactory),
+			)
+
+			pp.InitPlugin()
+
+			// Verify FilterPlugins
+			for _, pluginName := range tt.expectInFilter {
+				if _, exists := pp.FilterPlugins[pluginName]; !exists {
+					t.Errorf("expected %s in FilterPlugins, but not found", pluginName)
+				}
+			}
+			for _, pluginName := range tt.expectNotInFilter {
+				if _, exists := pp.FilterPlugins[pluginName]; exists {
+					t.Errorf("expected %s not in FilterPlugins, but found", pluginName)
+				}
+			}
+
+			// Verify StableFilterPlugins
+			for _, pluginName := range tt.expectInStableFilter {
+				if _, exists := pp.StableFilterPlugins[pluginName]; !exists {
+					t.Errorf("expected %s in StableFilterPlugins, but not found", pluginName)
+				}
+			}
+
+			// Verify PreFilterPlugins
+			for _, pluginName := range tt.expectInPrefilter {
+				if _, exists := pp.PreFilterPlugins[pluginName]; !exists {
+					t.Errorf("expected %s in PreFilterPlugins, but not found", pluginName)
+				}
+			}
+
+			// Verify ReservePlugins
+			for _, pluginName := range tt.expectInReserve {
+				if _, exists := pp.ReservePlugins[pluginName]; !exists {
+					t.Errorf("expected %s in ReservePlugins, but not found", pluginName)
+				}
+			}
+			for _, pluginName := range tt.expectNotInReserve {
+				if _, exists := pp.ReservePlugins[pluginName]; exists {
+					t.Errorf("expected %s not in ReservePlugins, but found", pluginName)
+				}
+			}
+
+			// Verify PreBindPlugins
+			for _, pluginName := range tt.expectInPreBind {
+				if _, exists := pp.PreBindPlugins[pluginName]; !exists {
+					t.Errorf("expected %s in PreBindPlugins, but not found", pluginName)
+				}
+			}
+			for _, pluginName := range tt.expectNotInPreBind {
+				if _, exists := pp.PreBindPlugins[pluginName]; exists {
+					t.Errorf("expected %s not in PreBindPlugins, but found", pluginName)
+				}
+			}
+
+			// Verify ScorePlugins
+			for _, pluginName := range tt.expectInScore {
+				if _, exists := pp.ScorePlugins[pluginName]; !exists {
+					t.Errorf("expected %s in ScorePlugins, but not found", pluginName)
+				}
+			}
+			for _, pluginName := range tt.expectNotInScore {
+				if _, exists := pp.ScorePlugins[pluginName]; exists {
+					t.Errorf("expected %s not in ScorePlugins, but found", pluginName)
+				}
+			}
+
+			// Verify VolumeBinding weight if enabled
+			if tt.enableVolumeBinding {
+				if weight, exists := pp.ScoreWeights[vbcap.Name]; !exists || weight == 0 {
+					t.Errorf("expected VolumeBinding to have non-zero weight in ScoreWeights")
+				}
+			}
+		})
+	}
+}
+
+func TestPredicateFailureReasonAggregationOrderStable(t *testing.T) {
+	pp := New(nil).(*PredicatesPlugin)
+	pp.enabledPredicates = predicateEnable{
+		nodeAffinityEnable:    true,
+		nodePortEnable:        true,
+		taintTolerationEnable: true,
+	}
+	pp.StableFilterPlugins = map[string]schedframework.FilterPlugin{
+		nodeunschedulable.Name: &fakeFilterPlugin{name: nodeunschedulable.Name, message: "stable-nodeunschedulable"},
+		nodeaffinity.Name:      &fakeFilterPlugin{name: nodeaffinity.Name, message: "stable-nodeaffinity"},
+		tainttoleration.Name:   &fakeFilterPlugin{name: tainttoleration.Name, message: "stable-tainttoleration"},
+	}
+	pp.FilterPlugins = map[string]schedframework.FilterPlugin{
+		nodeunschedulable.Name: &fakeFilterPlugin{name: nodeunschedulable.Name, message: "stable-nodeunschedulable"},
+		nodeaffinity.Name:      &fakeFilterPlugin{name: nodeaffinity.Name, message: "stable-nodeaffinity"},
+		nodeports.Name:         &fakeFilterPlugin{name: nodeports.Name, message: "normal-nodeports"},
+		tainttoleration.Name:   &fakeFilterPlugin{name: tainttoleration.Name, message: "stable-tainttoleration"},
+	}
+	pp.StableFilterOrder = []string{nodeunschedulable.Name, nodeaffinity.Name, tainttoleration.Name}
+	pp.FilterOrder = []string{nodeunschedulable.Name, nodeaffinity.Name, nodeports.Name, tainttoleration.Name}
+
+	node := &apiv1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+		Status: apiv1.NodeStatus{
+			Capacity: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("4"),
+				apiv1.ResourceMemory: resource.MustParse("8Gi"),
+				apiv1.ResourcePods:   resource.MustParse("100"),
+			},
+			Allocatable: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("4"),
+				apiv1.ResourceMemory: resource.MustParse("8Gi"),
+				apiv1.ResourcePods:   resource.MustParse("100"),
+			},
+		},
+	}
+	k8sNodeInfo := schedframework.NewNodeInfo()
+	k8sNodeInfo.SetNode(node)
+	pp.Handle = k8s.NewFramework(map[string]k8sframework.NodeInfo{"node-1": k8sNodeInfo})
+
+	task := api.NewTaskInfo(util.BuildPod("ns", "p1", "", apiv1.PodPending, nil, "pg", nil, nil))
+	volcanoNode := api.NewNodeInfo(node)
+
+	expected := []string{
+		"stable-nodeunschedulable",
+		"stable-nodeaffinity",
+		"stable-tainttoleration",
+		"normal-nodeports",
+	}
+	for i := 0; i < 20; i++ {
+		err := pp.Predicate(task, volcanoNode, schedframework.NewCycleState())
+		if err == nil {
+			t.Fatalf("expected predicate error, got nil")
+		}
+		fitErr, ok := err.(*api.FitError)
+		if !ok {
+			t.Fatalf("expected *api.FitError, got %T", err)
+		}
+		assert.Equal(t, expected, fitErr.Reasons())
+	}
+}
+
+func TestReserveRollbackOrderStable(t *testing.T) {
+	calls := make([]string, 0, 8)
+	pp := New(nil).(*PredicatesPlugin)
+	pp.enabledPredicates = predicateEnable{
+		volumeBindingEnable:             true,
+		dynamicResourceAllocationEnable: true,
+	}
+	pp.ReservePlugins = map[string]schedframework.ReservePlugin{
+		vbcap.Name:            &fakeReservePlugin{name: vbcap.Name, calls: &calls},
+		dynamicresources.Name: &fakeReservePlugin{name: dynamicresources.Name, calls: &calls},
+	}
+	pp.ReserveOrder = []string{vbcap.Name, dynamicresources.Name}
+
+	pod := util.BuildPod("ns", "p1", "", apiv1.PodPending, nil, "pg", nil, nil)
+	pod.Spec.NodeName = "node-1"
+	pod.Spec.Volumes = []apiv1.Volume{
+		{
+			Name: "pvc-vol",
+			VolumeSource: apiv1.VolumeSource{
+				PersistentVolumeClaim: &apiv1.PersistentVolumeClaimVolumeSource{ClaimName: "claim-1"},
+			},
+		},
+	}
+	task := api.NewTaskInfo(pod)
+
+	event := &framework.Event{Task: task}
+	ssn := &framework.Session{
+		Jobs: map[api.JobID]*api.JobInfo{
+			task.Job: {
+				UID: task.Job,
+				Tasks: map[api.TaskID]*api.TaskInfo{
+					task.UID: task,
+				},
+			},
+		},
+	}
+	pp.runReservePlugins(ssn, event)
+	if event.Err != nil {
+		t.Fatalf("unexpected reserve error: %v", event.Err)
+	}
+
+	bindCtx := &cache.BindContext{
+		TaskInfo:   task,
+		Extensions: map[string]cache.BindContextExtension{pp.Name(): &BindContextExtension{State: schedframework.NewCycleState()}},
+	}
+	pp.PreBindRollBack(context.Background(), bindCtx)
+
+	assert.Equal(t, []string{
+		"reserve-VolumeBinding",
+		"reserve-DynamicResources",
+		"unreserve-DynamicResources",
+		"unreserve-VolumeBinding",
+	}, calls)
 }

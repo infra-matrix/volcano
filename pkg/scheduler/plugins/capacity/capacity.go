@@ -23,7 +23,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
-	k8sframework "k8s.io/kubernetes/pkg/scheduler/framework"
+	fwk "k8s.io/kube-scheduler/framework"
 
 	"volcano.sh/apis/pkg/apis/scheduling"
 
@@ -47,7 +47,6 @@ type capacityPlugin struct {
 	rootQueue      string
 	totalResource  *api.Resource
 	totalGuarantee *api.Resource
-	totalDeserved  *api.Resource
 
 	queueOpts map[api.QueueID]*queueAttr
 	// Arguments given for the plugin
@@ -98,6 +97,7 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 	readyToSchedule := true
 	if hierarchyEnabled {
 		readyToSchedule = cp.buildHierarchicalQueueAttrs(ssn)
+		klog.V(4).Infof("Hierarchy is enabled in capacity plugin")
 	} else {
 		cp.buildQueueAttrs(ssn)
 	}
@@ -113,22 +113,52 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		for _, reclaimee := range reclaimees {
 			job := ssn.Jobs[reclaimee.Job]
 			attr := cp.queueOpts[job.Queue]
+			klog.V(5).Infof("[capacity] Considering reclaimee <%s/%s> from queue <%s> for reclaimer <%s/%s>.",
+				reclaimee.Namespace, reclaimee.Name, attr.queueID, reclaimer.Namespace, reclaimer.Name)
 
+			// If reclaimee doesn't have intersecting resource dimensions with reclaimer we can skip it.
+			if skip, reason := cp.shouldSkipReclaimee(reclaimee, reclaimer); skip {
+				klog.V(5).Infof("%s, skip it.", reason)
+				continue
+			}
+
+			// allocations maps each queue to its current allocated resources (cloned) and 'allocated' points to this resource object.
+			// As victims (reclaimees) are selected, their resource requests are subtracted from the corresponding queue's allocation via this pointer.
+			// This ensures that subsequent victim selection for the same queue uses the updated allocation state.
 			if _, found := allocations[job.Queue]; !found {
 				allocations[job.Queue] = attr.allocated.Clone()
 			}
 			allocated := allocations[job.Queue]
 
-			exceptReclaimee := allocated.Clone().Sub(reclaimee.Resreq)
-			// When scalar resource not specified in deserved such as "pods", we should skip it and consider it as infinity,
-			// so the following first condition will be true and the current queue will not be reclaimed.
-			if allocated.LessEqual(attr.deserved, api.Infinity) || !attr.guarantee.LessEqual(exceptReclaimee, api.Zero) {
+			// Check guarantee
+			if satisfies, _ := cp.checkGuaranteeConstraint(allocated, reclaimee, attr.guarantee); !satisfies {
 				continue
 			}
-			allocated.Sub(reclaimee.Resreq)
-			victims = append(victims, reclaimee)
+
+			// If the reclaimee has no intersecting resource dimensions with deserved, it is a victim.
+			if isVictim, reason := cp.isImmediateVictim(reclaimee, attr.deserved); isVictim {
+				allocated.Sub(reclaimee.Resreq)
+				victims = append(victims, reclaimee)
+				klog.V(5).Infof("%s. It's a victim. Current victims: %+v.", reason, victims)
+				continue
+			}
+
+			// Check deserved
+			if exceeds, dims, reason := cp.checkDeservedExceedance(
+				allocated, attr.deserved, reclaimee, reclaimer, attr.name); !exceeds {
+				klog.V(5).Infof("%s", reason)
+				continue
+			} else {
+				klog.V(5).Infof("[capacity] Reclaimee <%s/%s> is a victim from queue <%s> for reclaimer <%s/%s>. "+
+					"Allocated: <%v>, Deserved: <%v>, Reclaimee Resreq: <%v>, Reclaimable on dimensions: %v.",
+					reclaimee.Namespace, reclaimee.Name, attr.queueID, reclaimer.Namespace, reclaimer.Name,
+					allocated, attr.deserved, reclaimee.Resreq, dims)
+				allocated.Sub(reclaimee.Resreq)
+				victims = append(victims, reclaimee)
+				klog.V(5).Infof("[capacity] Current victims: %+v.", victims)
+			}
 		}
-		klog.V(4).Infof("Victims from capacity plugin, victims=%+v reclaimer=%s", victims, reclaimer)
+		klog.V(4).Infof("[capacity] Victims from capacity plugin: victims=%+v reclaimer=%s.", victims, reclaimer)
 		return victims, util.Permit
 	})
 
@@ -141,23 +171,31 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		queue := obj.(*api.QueueInfo)
 		task := candidate.(*api.TaskInfo)
 		if queue.Queue.Status.State != scheduling.QueueStateOpen {
-			klog.V(3).Infof("Queue <%s> current state: %s, is not open state, can not reclaim for <%s>.", queue.Name, queue.Queue.Status.State, task.Name)
+			klog.V(3).Infof("Queue <%s> current state: %s, is not open state, can not reclaim for <%s>.",
+				queue.Name, queue.Queue.Status.State, task.Name)
 			return false
 		}
-		attr := cp.queueOpts[queue.UID]
 
+		attr := cp.queueOpts[queue.UID]
 		futureUsed := attr.allocated.Clone().Add(task.Resreq)
-		allocatable, _ := futureUsed.LessEqualWithDimensionAndResourcesName(attr.deserved, task.Resreq)
-		overused := !allocatable
-		metrics.UpdateQueueOverused(attr.name, overused)
-		if overused {
-			klog.V(3).Infof("Queue <%v> can not reclaim, deserved <%v>, allocated <%v>, share <%v>, requested <%v>",
-				queue.Name, attr.deserved, attr.allocated, attr.share, task.Resreq)
+
+		// If there is a single dimension whose deserved is greater than allocated, current task can reclaim by preempt others.
+		isPreemptive, resourceNames := futureUsed.LessEqualPartlyWithDimensionZeroFiltered(attr.deserved, task.Resreq)
+		if isPreemptive {
+			klog.V(3).Infof("Queue <%v> can reclaim on resource dimensions: %v. "+
+				"The futureUsed: %v, deserved: %v, allocated: %v, task requested: %v",
+				queue.Name, resourceNames, futureUsed, attr.deserved, attr.allocated, task.Resreq)
+		} else {
+			klog.V(3).Infof("Queue <%v> can not reclaim, futureUsed: %v, deserved: %v, requested: %v",
+				queue.Name, futureUsed, attr.deserved, task.Resreq)
 		}
+
+		overused := !isPreemptive
+		metrics.UpdateQueueOverused(attr.name, overused)
 
 		// PreemptiveFn is the opposite of OverusedFn in proportion plugin cause as long as there is a one-dimensional
 		// resource whose deserved is greater than allocated, current task can reclaim by preempt others.
-		return !overused
+		return isPreemptive
 	})
 
 	ssn.AddAllocatableFn(cp.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {
@@ -193,7 +231,8 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		queue := ssn.Queues[queueID]
 		// If the queue is not open, do not enqueue
 		if queue.Queue.Status.State != scheduling.QueueStateOpen {
-			klog.V(3).Infof("Queue <%s> current state: %s, is not open state, reject job <%s/%s>.", queue.Name, queue.Queue.Status.State, job.Namespace, job.Name)
+			klog.V(3).Infof("Queue <%s> current state: %s, is not open state, reject job <%s/%s>.",
+				queue.Name, queue.Queue.Status.State, job.Namespace, job.Name)
 			return util.Reject
 		}
 		// If no capability is set, always enqueue the job.
@@ -239,7 +278,7 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		return nil
 	})
 
-	ssn.AddSimulateAddTaskFn(cp.Name(), func(ctx context.Context, cycleState *k8sframework.CycleState, taskToSchedule *api.TaskInfo, taskToAdd *api.TaskInfo, nodeInfo *api.NodeInfo) error {
+	ssn.AddSimulateAddTaskFn(cp.Name(), func(ctx context.Context, cycleState fwk.CycleState, taskToSchedule *api.TaskInfo, taskToAdd *api.TaskInfo, nodeInfo *api.NodeInfo) error {
 		state, err := getCapacityState(cycleState)
 		if err != nil {
 			return fmt.Errorf("failed to get capacity state: %w", err)
@@ -261,7 +300,7 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		return nil
 	})
 
-	ssn.AddSimulateRemoveTaskFn(cp.Name(), func(ctx context.Context, cycleState *k8sframework.CycleState, taskToSchedule *api.TaskInfo, taskToRemove *api.TaskInfo, nodeInfo *api.NodeInfo) error {
+	ssn.AddSimulateRemoveTaskFn(cp.Name(), func(ctx context.Context, cycleState fwk.CycleState, taskToSchedule *api.TaskInfo, taskToRemove *api.TaskInfo, nodeInfo *api.NodeInfo) error {
 		state, err := getCapacityState(cycleState)
 		if err != nil {
 			return fmt.Errorf("failed to get capacity state: %w", err)
@@ -282,7 +321,7 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		return nil
 	})
 
-	ssn.AddSimulateAllocatableFn(cp.Name(), func(ctx context.Context, cycleState *k8sframework.CycleState, queue *api.QueueInfo, candidate *api.TaskInfo) bool {
+	ssn.AddSimulateAllocatableFn(cp.Name(), func(ctx context.Context, cycleState fwk.CycleState, queue *api.QueueInfo, candidate *api.TaskInfo) bool {
 		state, err := getCapacityState(cycleState)
 		if err != nil {
 			return false
@@ -500,15 +539,7 @@ func (cp *capacityPlugin) buildQueueAttrs(ssn *framework.Session) {
 			return int(rv.Queue.Spec.Priority) - int(lv.Queue.Spec.Priority)
 		}
 
-		if cp.queueOpts[lv.UID].share == cp.queueOpts[rv.UID].share {
-			return 0
-		}
-
-		if cp.queueOpts[lv.UID].share < cp.queueOpts[rv.UID].share {
-			return -1
-		}
-
-		return 1
+		return cp.compareShareWithDeserved(cp.queueOpts[lv.UID], cp.queueOpts[rv.UID])
 	})
 }
 
@@ -525,7 +556,8 @@ func (cp *capacityPlugin) buildHierarchicalQueueAttrs(ssn *framework.Session) bo
 
 		attr := cp.newQueueAttr(queue)
 		cp.queueOpts[queue.UID] = attr
-		err := cp.updateAncestors(queue, ssn)
+		visited := make(map[api.QueueID]struct{})
+		err := cp.updateAncestors(queue, ssn, visited)
 		if err != nil {
 			klog.Errorf("Failed to update Queue <%s> attributes, error: %v", queue.Name, err)
 			return false
@@ -573,38 +605,39 @@ func (cp *capacityPlugin) buildHierarchicalQueueAttrs(ssn *framework.Session) bo
 		}
 		attr.elastic.Add(job.GetElasticResources())
 
+		allocatedDelta := attr.allocated.Clone().Sub(oldAllocated)
+		requestDelta := attr.request.Clone().Sub(oldRequest)
+		inqueueDelta := attr.inqueue.Clone().Sub(oldInqueue)
+		elasticDelta := attr.elastic.Clone().Sub(oldElastic)
 		for _, ancestor := range attr.ancestors {
 			ancestorAttr := cp.queueOpts[ancestor]
-			ancestorAttr.allocated.Add(attr.allocated.Clone().Sub(oldAllocated))
-			ancestorAttr.request.Add(attr.request.Clone().Sub(oldRequest))
-			ancestorAttr.inqueue.Add(attr.inqueue.Clone().Sub(oldInqueue))
-			ancestorAttr.elastic.Add(attr.elastic.Clone().Sub(oldElastic))
+			ancestorAttr.allocated.Add(allocatedDelta)
+			ancestorAttr.request.Add(requestDelta)
+			ancestorAttr.inqueue.Add(inqueueDelta)
+			ancestorAttr.elastic.Add(elasticDelta)
 		}
 
 		klog.V(5).Infof("Queue %s allocated <%s> request <%s> inqueue <%s> elastic <%s>",
 			attr.name, attr.allocated.String(), attr.request.String(), attr.inqueue.String(), attr.elastic.String())
 	}
 
-	// init root queue: realCapability is set to total resource, and capability/deserved are also set if empty.
+	// init root queue: realCapability is and capability is set to ininity if capability is not set.  deserved are also set if empty.
+	// root queue is default queue and users are not aware of it. User is allowed to sumbit jobs which exceed current cluster total resources,
+	// so root queue should not restrict by current total resources. User need to restrict resource through creating queue manually
 	rootQueueAttr := cp.queueOpts[api.QueueID(cp.rootQueue)]
+	infinityResource := api.InfiniteResource()
+	if cp.totalResource.ScalarResources != nil {
+		for k := range cp.totalResource.ScalarResources {
+			infinityResource.SetScalar(k, math.MaxInt64)
+		}
+	}
 	if rootQueueAttr.capability.IsEmpty() {
-		rootQueueAttr.capability = cp.totalResource
+		rootQueueAttr.capability = infinityResource
 	}
-	if rootQueueAttr.deserved.IsEmpty() {
-		rootQueueAttr.deserved = cp.totalResource
-	}
-	rootQueueAttr.realCapability = cp.totalResource
-	// Check the hierarchical structure of queues
-	err := cp.checkHierarchicalQueue(rootQueueAttr)
-	if err != nil {
-		klog.Errorf("Failed to check queue's hierarchical structure, error: %v", err)
-		return false
-	}
-	klog.V(4).Infof("Successfully checked queue's hierarchical structure.")
-
-	// update session attributes
-	ssn.TotalGuarantee = cp.totalGuarantee
-	ssn.TotalDeserved = cp.totalDeserved
+	rootQueueAttr.realCapability = rootQueueAttr.capability
+	// checkHierarchicalQueue only logs warnings and never returns errors
+	// to avoid aborting the entire scheduling cycle due to configuration issues
+	cp.checkHierarchicalQueue(rootQueueAttr)
 
 	// Update share
 	for _, attr := range cp.queueOpts {
@@ -640,14 +673,7 @@ func (cp *capacityPlugin) buildHierarchicalQueueAttrs(ssn *framework.Session) bo
 		} else if !lvLeaf && rvLeaf {
 			return 1
 		} else if !lvLeaf && !rvLeaf {
-			if cp.queueOpts[lv.UID].share == cp.queueOpts[rv.UID].share {
-				return 0
-			}
-
-			if cp.queueOpts[lv.UID].share < cp.queueOpts[rv.UID].share {
-				return -1
-			}
-			return 1
+			return cp.compareShareWithDeserved(cp.queueOpts[lv.UID], cp.queueOpts[rv.UID])
 		}
 
 		lvAttr := cp.queueOpts[lv.UID]
@@ -662,15 +688,7 @@ func (cp *capacityPlugin) buildHierarchicalQueueAttrs(ssn *framework.Session) bo
 			rvParentID = rvAttr.ancestors[level+1]
 		}
 
-		if cp.queueOpts[lvParentID].share == cp.queueOpts[rvParentID].share {
-			return 0
-		}
-
-		if cp.queueOpts[lvParentID].share < cp.queueOpts[rvParentID].share {
-			return -1
-		}
-
-		return 1
+		return cp.compareShareWithDeserved(cp.queueOpts[lvParentID], cp.queueOpts[rvParentID])
 	})
 
 	ssn.AddVictimQueueOrderFn(cp.Name(), func(l, r, preemptor interface{}) int {
@@ -702,13 +720,14 @@ func (cp *capacityPlugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
 		ancestors: make([]api.QueueID, 0),
 		children:  make(map[api.QueueID]*queueAttr),
 
-		deserved:   api.NewResource(queue.Queue.Spec.Deserved),
-		allocated:  api.EmptyResource(),
-		request:    api.EmptyResource(),
-		elastic:    api.EmptyResource(),
-		inqueue:    api.EmptyResource(),
-		guarantee:  api.EmptyResource(),
-		capability: api.EmptyResource(),
+		deserved:       api.NewResource(queue.Queue.Spec.Deserved),
+		allocated:      api.EmptyResource(),
+		request:        api.EmptyResource(),
+		elastic:        api.EmptyResource(),
+		inqueue:        api.EmptyResource(),
+		guarantee:      api.EmptyResource(),
+		capability:     api.EmptyResource(),
+		realCapability: api.EmptyResource(),
 	}
 	if len(queue.Queue.Spec.Capability) != 0 {
 		attr.capability = api.NewResource(queue.Queue.Spec.Capability)
@@ -721,10 +740,17 @@ func (cp *capacityPlugin) newQueueAttr(queue *api.QueueInfo) *queueAttr {
 	return attr
 }
 
-func (cp *capacityPlugin) updateAncestors(queue *api.QueueInfo, ssn *framework.Session) error {
+func (cp *capacityPlugin) updateAncestors(queue *api.QueueInfo, ssn *framework.Session, visited map[api.QueueID]struct{}) error {
 	if queue.Name == cp.rootQueue {
 		return nil
 	}
+
+	// Check for cycles in queue hierarchy
+	if _, exist := visited[queue.UID]; exist {
+		return fmt.Errorf("cycle detected in queue hierarchy for queue %s", queue.Name)
+	}
+	visited[queue.UID] = struct{}{}
+	defer delete(visited, queue.UID)
 
 	parent := cp.rootQueue
 	if queue.Queue.Spec.Parent != "" {
@@ -738,7 +764,7 @@ func (cp *capacityPlugin) updateAncestors(queue *api.QueueInfo, ssn *framework.S
 	if _, found := cp.queueOpts[parentInfo.UID]; !found {
 		parentAttr := cp.newQueueAttr(parentInfo)
 		cp.queueOpts[parentAttr.queueID] = parentAttr
-		err := cp.updateAncestors(parentInfo, ssn)
+		err := cp.updateAncestors(parentInfo, ssn, visited)
 		if err != nil {
 			return err
 		}
@@ -749,10 +775,11 @@ func (cp *capacityPlugin) updateAncestors(queue *api.QueueInfo, ssn *framework.S
 	return nil
 }
 
-func (cp *capacityPlugin) checkHierarchicalQueue(attr *queueAttr) error {
+func (cp *capacityPlugin) checkHierarchicalQueue(attr *queueAttr) {
 	totalGuarantee := api.EmptyResource()
 	totalDeserved := api.EmptyResource()
 	for _, childAttr := range attr.children {
+		childAttr.deserved = helpers.Max(childAttr.deserved, childAttr.guarantee)
 		totalDeserved.Add(childAttr.deserved)
 		totalGuarantee.Add(childAttr.guarantee)
 		// if the user does not set CPU or memory in capability, we set the value to be the same as parent(we do not consider the situation where the user sets CPU or memory<=0)
@@ -775,22 +802,17 @@ func (cp *capacityPlugin) checkHierarchicalQueue(attr *queueAttr) error {
 			}
 		}
 
-		// Check if the parent queue's capability is less than the child queue's capability
-		if attr.capability.LessPartly(childAttr.capability, api.Zero) {
-			return fmt.Errorf("queue <%s> capability <%s> is less than its child queue <%s> capability <%s>",
-				attr.name, attr.capability, childAttr.name, childAttr.capability)
+		// Check if child queue's capability exceeds parent queue's capability.
+		if exceeds, resources := childAttr.capability.GreaterPartly(attr.capability, api.Infinity); exceeds {
+			klog.Errorf("Child queue %s capability (%s) exceeds parent queue %s capability (%s) on resources %v. "+
+				"Child's effective capability will be limited by parent.",
+				childAttr.name, childAttr.capability, attr.name, attr.capability, resources)
 		}
 	}
 
 	if attr.name == cp.rootQueue {
-		if attr.guarantee.IsEmpty() {
-			attr.guarantee = totalGuarantee
-		}
-		if attr.deserved.IsEmpty() {
-			attr.deserved = totalDeserved
-		}
-		cp.totalGuarantee = attr.guarantee
-		cp.totalDeserved = attr.deserved
+		attr.guarantee = totalGuarantee
+		attr.deserved = totalDeserved
 	}
 
 	for _, childAttr := range attr.children {
@@ -806,24 +828,44 @@ func (cp *capacityPlugin) checkHierarchicalQueue(attr *queueAttr) error {
 
 	// Check if the parent queue's deserved resources are less than the total deserved resources of child queues
 	if attr.deserved.LessPartly(totalDeserved, api.Zero) {
-		return fmt.Errorf("queue <%s> deserved resources <%s> are less than the sum of its child queues' deserved resources <%s>",
-			attr.name, attr.deserved, totalDeserved)
+		klog.Errorf("Sum of child queue deserved (%s) exceeds parent queue %s deserved (%s). "+
+			"This may affect resource distribution during scheduling.",
+			totalDeserved, attr.name, attr.deserved)
 	}
 
 	// Check if the parent queue's guarantee resources are less than the total guarantee resources of child queues
 	if attr.guarantee.LessPartly(totalGuarantee, api.Zero) {
-		return fmt.Errorf("queue <%s> guarantee resources <%s> are less than the sum of its child queues' guarantee resources <%s>",
-			attr.name, attr.guarantee, totalGuarantee)
+		klog.Errorf("Sum of child queue guarantees (%s) exceeds parent queue %s guarantee (%s). "+
+			"Not all child guarantees can be satisfied simultaneously.",
+			totalGuarantee, attr.name, attr.guarantee)
 	}
 
+	// Recursively check child queues
 	for _, childAttr := range attr.children {
-		err := cp.checkHierarchicalQueue(childAttr)
-		if err != nil {
-			return err
+		cp.checkHierarchicalQueue(childAttr)
+	}
+}
+
+// compareShareWithDeserved compares two queueAttr by share; when shares are equal,
+// queues with non-empty deserved are prioritized over best-effort queues.
+// Returns negative if l should come before r.
+func (cp *capacityPlugin) compareShareWithDeserved(lattr, rattr *queueAttr) int {
+	if lattr.share == rattr.share {
+		lHasDeserved := !lattr.deserved.IsEmpty()
+		rHasDeserved := !rattr.deserved.IsEmpty()
+		if lHasDeserved == rHasDeserved {
+			return 0
 		}
+		if lHasDeserved {
+			return -1
+		}
+		return 1
 	}
 
-	return nil
+	if lattr.share < rattr.share {
+		return -1
+	}
+	return 1
 }
 
 func (cp *capacityPlugin) updateShare(attr *queueAttr) {
@@ -916,7 +958,7 @@ func getQueueLevel(l *queueAttr, r *queueAttr) int {
 	return level
 }
 
-func getCapacityState(cycleState *k8sframework.CycleState) (*capacityState, error) {
+func getCapacityState(cycleState fwk.CycleState) (*capacityState, error) {
 	c, err := cycleState.Read(capacityStateKey)
 	if err != nil {
 		// preFilterState doesn't exist, likely PreFilter wasn't invoked.
@@ -966,7 +1008,7 @@ func (qa *queueAttr) Clone() *queueAttr {
 	return cloned
 }
 
-func (s *capacityState) Clone() k8sframework.StateData {
+func (s *capacityState) Clone() fwk.StateData {
 	if s == nil {
 		return nil
 	}
@@ -985,9 +1027,89 @@ func (s *capacityState) Clone() k8sframework.StateData {
 func updateQueueAttrShare(attr *queueAttr) {
 	res := float64(0)
 
+	// If no deserved is configured for this queue, treat it as a best-effort queue.
+	// Best-effort queues should have lowest scheduling priority: only when all queues
+	// with deserved (i.e., resource guarantee) have share >= 1, best-effort queues
+	// are scheduled. To ensure this, set share = 1 for ALL best-effort queues no matter
+	// how many resources (allocated or requesting), so that they are always scheduled
+	// after any queue with deserved whose share < 1.
+	//
+	// When share values are equal, QueueOrderFn uses tie-breaking logic to prioritize
+	// queues with deserved over best-effort queues. This further prevents reclaim thrashing.
+	//
+	// The semantics here are:
+	//   - no deserved (best-effort) -> share = 1 (always goes after share<1)
+	//   - with deserved, share < 1 -> prioritized
+	//   - with deserved, share >= 1 -> equal priority with best-effort
+	if attr.deserved.IsEmpty() {
+		attr.share = 1
+		return
+	}
+
 	for _, rn := range attr.deserved.ResourceNames() {
 		res = max(res, helpers.Share(attr.allocated.Get(rn), attr.deserved.Get(rn)))
 	}
 
 	attr.share = res
+}
+
+// shouldSkipReclaimee checks if a reclaimee should be skipped based on whether it has
+// intersecting resource dimensions with the reclaimer. Returns true if should skip, with a reason message.
+func (cp *capacityPlugin) shouldSkipReclaimee(reclaimee, reclaimer *api.TaskInfo) (bool, string) {
+	reclaimerIntersecting := len(api.IntersectionWithIgnoredScalarResources(reclaimee.Resreq, reclaimer.InitResreq)) > 0
+	if !reclaimerIntersecting {
+		return true, fmt.Sprintf("[capacity] Reclaimee <%s/%s>: <%v> does not have intersecting resource dimensions with reclaimer <%s/%s>: <%v>",
+			reclaimee.Namespace, reclaimee.Name, reclaimee.Resreq, reclaimer.Namespace, reclaimer.Name, reclaimer.InitResreq)
+	}
+	return false, ""
+}
+
+// checkGuaranteeConstraint checks if removing the reclaimee would violate the queue's guarantee.
+// Returns true if the guarantee constraint is satisfied (i.e., reclaim is allowed).
+func (cp *capacityPlugin) checkGuaranteeConstraint(
+	allocated *api.Resource,
+	reclaimee *api.TaskInfo,
+	guarantee *api.Resource,
+) (bool, *api.Resource) {
+	exceptReclaimee := allocated.Clone().Sub(reclaimee.Resreq)
+	reclaimable := guarantee.LessEqual(exceptReclaimee, api.Zero)
+	return reclaimable, exceptReclaimee
+}
+
+// isImmediateVictim checks if a reclaimee is an immediate victim because it has no
+// intersecting resource dimensions with the queue's deserved resources.
+// Returns true if it's an immediate victim, with a reason message.
+func (cp *capacityPlugin) isImmediateVictim(
+	reclaimee *api.TaskInfo,
+	deserved *api.Resource,
+) (bool, string) {
+	deservedIntersecting := len(api.Intersection(reclaimee.Resreq, deserved)) > 0
+	if !deservedIntersecting {
+		return true, fmt.Sprintf("[capacity] No intersection between deserved: <%v> and reclaimee <%s/%s>: <%v>",
+			deserved, reclaimee.Namespace, reclaimee.Name, reclaimee.Resreq)
+	}
+	return false, ""
+}
+
+// checkDeservedExceedance checks if the queue's allocated resources exceed its deserved resources
+// on dimensions relevant to the reclaimee, making the reclaimee a valid victim.
+// Returns true if exceeds, along with the relevant dimensions and a reason message.
+func (cp *capacityPlugin) checkDeservedExceedance(
+	allocated *api.Resource,
+	deserved *api.Resource,
+	reclaimee *api.TaskInfo,
+	reclaimer *api.TaskInfo,
+	queueName string,
+) (bool, []string, string) {
+	reclaimable, dims := allocated.GreaterPartlyWithRelevantDimensions(deserved, reclaimee.Resreq)
+	if !reclaimable {
+		reason := fmt.Sprintf(
+			"[capacity] Queue <%v> allocated resources are not greater than deserved on any relevant dimension of reclaimee. "+
+				"Hence reclaimee <%s/%s> cannot be reclaimed for reclaimer <%s/%s>. "+
+				"Deserved: <%v>, Allocated: <%v>, Reclaimee Resreq: <%v>",
+			queueName, reclaimee.Namespace, reclaimee.Name, reclaimer.Namespace, reclaimer.Name, deserved, allocated, reclaimee.Resreq,
+		)
+		return false, nil, reason
+	}
+	return true, dims, ""
 }

@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,8 +37,8 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
-	k8sframework "k8s.io/kubernetes/pkg/scheduler/framework"
-	k8sutil "k8s.io/kubernetes/pkg/scheduler/util"
+
+	fwk "k8s.io/kube-scheduler/framework"
 
 	"volcano.sh/volcano/pkg/scheduler/api"
 	"volcano.sh/volcano/pkg/scheduler/conf"
@@ -108,8 +107,7 @@ func (pmpt *Action) Execute(ssn *framework.Session) {
 	preemptorsMap := map[api.QueueID]*util.PriorityQueue{}
 	preemptorTasks := map[api.JobID]*util.PriorityQueue{}
 
-	var underRequest []*api.JobInfo
-	queues := map[api.QueueID]*api.QueueInfo{}
+	underRequestByQueue := map[api.QueueID][]*api.JobInfo{}
 
 	for _, job := range ssn.Jobs {
 		if job.IsPending() {
@@ -121,34 +119,53 @@ func (pmpt *Action) Execute(ssn *framework.Session) {
 			continue
 		}
 
-		if queue, found := ssn.Queues[job.Queue]; !found {
+		if _, found := ssn.Queues[job.Queue]; !found {
+			klog.V(3).Infof("Queue <%s> not found for Job <%s/%s>, skip preemption", job.Queue, job.Namespace, job.Name)
 			continue
-		} else if _, existed := queues[queue.UID]; !existed {
-			klog.V(3).Infof("Added Queue <%s> for Job <%s/%s>",
-				queue.Name, job.Namespace, job.Name)
-			queues[queue.UID] = queue
 		}
 
 		// check job if starving for more resources.
-		if ssn.JobStarving(job) {
-			if _, found := preemptorsMap[job.Queue]; !found {
-				preemptorsMap[job.Queue] = util.NewPriorityQueue(ssn.JobOrderFn)
+		if !ssn.JobStarving(job) {
+			continue
+		}
+
+		// TODO: Currently, jobs containing networkTopology do not support preemption. Related issue: https://github.com/volcano-sh/volcano/issues/4374
+		if job.ContainsNetworkTopology() {
+			klog.V(3).Infof("Job <%s/%s> Queue <%s> skip preemption, reason: jobs containing networkTopology do not support preemption",
+				job.Namespace, job.Name, job.Queue)
+			continue
+		}
+
+		if _, found := preemptorsMap[job.Queue]; !found {
+			preemptorsMap[job.Queue] = util.NewPriorityQueue(ssn.JobOrderFn)
+		}
+		preemptorsMap[job.Queue].Push(job)
+		underRequestByQueue[job.Queue] = append(underRequestByQueue[job.Queue], job)
+		preemptorTasks[job.UID] = util.NewPriorityQueue(ssn.TaskOrderFn)
+		for _, task := range job.TaskStatusIndex[api.Pending] {
+			if task.SchGated {
+				continue
 			}
-			preemptorsMap[job.Queue].Push(job)
-			underRequest = append(underRequest, job)
-			preemptorTasks[job.UID] = util.NewPriorityQueue(ssn.TaskOrderFn)
-			for _, task := range job.TaskStatusIndex[api.Pending] {
-				if task.SchGated {
-					continue
-				}
-				preemptorTasks[job.UID].Push(task)
-			}
+			preemptorTasks[job.UID].Push(task)
+		}
+	}
+
+	// If plugin defines queue order function, use it to order queues.
+	queues := util.NewPriorityQueue(ssn.QueueOrderFn)
+	for queueID := range preemptorsMap {
+		if queue, found := ssn.Queues[queueID]; found {
+			queues.Push(queue)
 		}
 	}
 
 	ph := util.NewPredicateHelper()
 	// Preemption between Jobs within Queue.
-	for _, queue := range queues {
+	for {
+		if queues.Empty() {
+			break
+		}
+
+		queue := queues.Pop().(*api.QueueInfo)
 		for {
 			preemptors := preemptorsMap[queue.UID]
 
@@ -216,26 +233,26 @@ func (pmpt *Action) Execute(ssn *framework.Session) {
 		}
 
 		// Preemption between Task within Job.
-		for _, job := range underRequest {
-			// Fix: preemptor numbers lose when in same job
-			preemptorTasks[job.UID] = util.NewPriorityQueue(ssn.TaskOrderFn)
+		for _, job := range underRequestByQueue[queue.UID] {
+			// Here we need to use a scoped intraJob priority queue instead of overwriting preemptorTasks[job.UID].
+			// The original preemptorTasks map is populated during job discovery (lines above)
+			// and consumed by the "Preemption between Jobs within Queue" loop.
+			// Overwriting it here causes preemptors from other queues' starving jobs to be
+			// lost due to non-deterministic Go map iteration order in multi-queue scenarios.
+			intraJobPreemptors := util.NewPriorityQueue(ssn.TaskOrderFn)
 			for _, task := range job.TaskStatusIndex[api.Pending] {
 				// Again, skip scheduling gated tasks
 				if task.SchGated {
 					continue
 				}
-				preemptorTasks[job.UID].Push(task)
+				intraJobPreemptors.Push(task)
 			}
 			for {
-				if _, found := preemptorTasks[job.UID]; !found {
+				if intraJobPreemptors.Empty() {
 					break
 				}
 
-				if preemptorTasks[job.UID].Empty() {
-					break
-				}
-
-				preemptor := preemptorTasks[job.UID].Pop().(*api.TaskInfo)
+				preemptor := intraJobPreemptors.Pop().(*api.TaskInfo)
 
 				stmt := framework.NewStatement(ssn)
 				assigned, err := pmpt.preempt(ssn, stmt, preemptor, func(task *api.TaskInfo) bool {
@@ -289,13 +306,22 @@ func (pmpt *Action) preempt(
 
 	// we should filter out those nodes that are UnschedulableAndUnresolvable status got in allocate action
 	allNodes := ssn.FilterOutUnschedulableAndUnresolvableNodesForTask(preemptor)
-	predicateNodes, _ := predicateHelper.PredicateNodes(preemptor, allNodes, ssn.PredicateForPreemptAction, pmpt.enablePredicateErrorCache)
+	predicateNodes, _ := predicateHelper.PredicateNodes(preemptor, allNodes, ssn.PredicateForPreemptAction, pmpt.enablePredicateErrorCache, ssn.NodesInShard)
 
-	if pmpt.enableTopologyAwarePreemption {
-		return pmpt.topologyAwarePreempt(ssn, stmt, preemptor, filter, predicateNodes)
+	candidateNodes := util.GetPredicatedNodeByShard(predicateNodes, ssn.NodesInShard)
+	var preemptSuccess bool
+	var err error
+	//try to preempt in order if multiple candidate Nodes group with priority exist
+	for _, nodes := range candidateNodes {
+		if pmpt.enableTopologyAwarePreemption {
+			if preemptSuccess, err = pmpt.topologyAwarePreempt(ssn, stmt, preemptor, filter, nodes); preemptSuccess {
+				break
+			}
+		} else if preemptSuccess, err = pmpt.normalPreempt(ssn, stmt, preemptor, filter, nodes); preemptSuccess {
+			break
+		}
 	}
-
-	return pmpt.normalPreempt(ssn, stmt, preemptor, filter, predicateNodes)
+	return preemptSuccess, err
 }
 
 func (pmpt *Action) normalPreempt(
@@ -671,7 +697,7 @@ func (cl *candidateList) get() []*candidate {
 // for "pod" to be scheduled.
 func SelectVictimsOnNode(
 	ctx context.Context,
-	state *k8sframework.CycleState,
+	state fwk.CycleState,
 	preemptor *api.TaskInfo,
 	currentQueue *api.QueueInfo,
 	nodeInfo *api.NodeInfo,
@@ -725,10 +751,6 @@ func SelectVictimsOnNode(
 	}
 
 	klog.V(3).Infof("allVictims: %v", allVictims)
-
-	// Sort potentialVictims by pod priority from high to low, which ensures to
-	// reprieve higher priority pods first.
-	sort.Slice(allVictims, func(i, j int) bool { return k8sutil.MoreImportantPod(allVictims[i].Pod, allVictims[j].Pod) })
 
 	victimsQueue := ssn.BuildVictimsPriorityQueue(allVictims, preemptor)
 
@@ -789,6 +811,13 @@ func SelectVictimsOnNode(
 		}
 		klog.Infof("reprievePod for task: %v, fits: %v", pi.Name, fits)
 		return fits, nil
+	}
+
+	// Reverse potentialVictims to reprieve higher priority pods first.
+	// potentialVictims is collected from victimsQueue.Pop() which returns lower priority first,
+	// so we need to reverse it to ensure higher priority pods are reprieved first.
+	for i, j := 0, len(potentialVictims)-1; i < j; i, j = i+1, j-1 {
+		potentialVictims[i], potentialVictims[j] = potentialVictims[j], potentialVictims[i]
 	}
 
 	// Now we try to reprieve non-violating victims.
