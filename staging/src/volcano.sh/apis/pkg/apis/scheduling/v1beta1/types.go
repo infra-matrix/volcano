@@ -494,7 +494,6 @@ type QueueSpec struct {
 	Deserved v1.ResourceList `json:"deserved,omitempty" protobuf:"bytes,9,opt,name=deserved"`
 
 	// Priority define the priority of queue. Higher values are prioritized for scheduling and considered later during reclamation.
-	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Priority int32 `json:"priority,omitempty" protobuf:"bytes,10,opt,name=priority"`
 

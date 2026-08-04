@@ -22,7 +22,7 @@ spec:
         type: number
     ...
 ```
-The `priority` value should range from 0 to the maximum limit of int32.
+The `priority` value supports the full int32 range. Negative values are allowed and are ordered below zero and positive values.
 
 ### Queue Ordering
 

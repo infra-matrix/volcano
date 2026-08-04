@@ -153,7 +153,6 @@ spec:
                 description: Priority define the priority of queue. Higher values
                   are prioritized for scheduling and considered later during reclamation.
                 format: int32
-                minimum: 0
                 type: integer
               reclaimable:
                 description: Reclaimable indicate whether the queue can be reclaimed
